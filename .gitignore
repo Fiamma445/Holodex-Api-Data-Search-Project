@@ -1,0 +1,57 @@
+# 파이썬 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE / 에디터
+.vscode/
+.idea/
+
+# 데이터베이스 (용량 큼)
+*.db
+
+# 환경 변수
+.env
+
+# 백업 폴더
+backup_*/
+
+# 가드 파일
+.guard/
+
+# 임시 비교/디버그 파일
+.tmp*
+
+# 개인 문서 (포트폴리오, 태블로)
+PORTFOLIO_LAFTEL_DATA_ANALYST.md
+portfolio_metrics.json
+tableau_exports/
+
+# 에이전트 설정 / 워크플로우
+.agent/
+GEMINI.md
+
+# 스크립트
+scripts/
+
+# 학습 자료
+study/
+
+# 개인 문서 / 아키텍처
+ARCHITECTURE.md
+DEPLOYMENT_GUIDE.md
+DEPLOYMENT_TASKS.md
+
+# 데이터 / 분석 파일
+channels.json
+channels2.json
+*.csv
+
+# 불필요 유틸리티
+member_photos.js
+start_server_python.bat
+
+data/
+*.csv
+*.db
+*.json

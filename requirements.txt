@@ -1,0 +1,18 @@
+# HoloProject Server Dependencies (D-10: 버전 고정)
+# Python 3.12+
+
+# 웹 프레임워크
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+
+# HTTP 클라이언트
+httpx[http2]==0.28.1
+
+# 캐싱
+cachetools==5.5.2
+
+# 비동기 SQLite (선택)
+aiosqlite==0.21.0
+
+# 고속 JSON 파서
+orjson==3.10.18

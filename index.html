@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hololive Stream Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Flatpickr 달력 라이브러리 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/material_pink.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- 폰트 비동기 로딩: 렌더 블로킹 방지 -->
+    <link rel="preload" as="style"
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap"
+        rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript>
+        <link
+            href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=Noto+Sans+KR:wght@400;500;700&display=swap"
+            rel="stylesheet">
+    </noscript>
+</head>
+
+<body>
+    <!-- Sync Overlay (개선됨) -->
+    <div id="sync-overlay" class="sync-overlay" style="display: none;">
+        <div class="sync-content">
+            <!-- SVG 원형 진행 바 -->
+            <div class="circular-progress-container">
+                <svg class="circular-progress" viewBox="0 0 100 100">
+                    <circle class="progress-bg" cx="50" cy="50" r="45"></circle>
+                    <circle id="sync-progress-circle" class="progress-bar" cx="50" cy="50" r="45"></circle>
+                </svg>
+                <div class="progress-text" id="sync-progress-text">0%</div>
+            </div>
+            <h2>초기 동기화</h2>
+            <p id="sync-current-channel" class="sync-channel-name">준비 중...</p>
+            <p id="sync-status-text">Holodex에 연결 중...</p>
+            <div class="progress-bar-container">
+                <div id="sync-progress-fill" class="progress-fill" style="width: 0%"></div>
+            </div>
+            <p id="sync-video-count" class="sync-video-count">📥 0개 영상 다운로드</p>
+            <p class="sync-subtext">모든 채널의 영상 히스토리를 가져오는 중입니다.<br>몇 분 정도 소요될 수 있습니다.</p>
+            <button id="sync-cancel-btn" class="secondary-btn sync-cancel-btn">취소</button>
+        </div>
+    </div>
+
+    <header class="site-header">
+        <div class="container">
+            <div class="logo-area">
+                <span id="logo-icon" class="logo-icon">🌸</span>
+                <h1><span id="header-title">Hololive</span> <span class="subtitle">Stream Dashboard</span></h1>
+            </div>
+            <nav class="main-nav">
+                <a href="#" data-view="home" class="active">홈</a>
+                <a href="#" data-view="live">라이브 & 예정</a>
+                <a href="#" data-view="archive">아카이브</a>
+                <a href="#" data-view="clips">키리누키</a>
+                <a href="#" data-view="stats">통계</a>
+            </nav>
+        </div>
+    </header>
+
+    <div class="main-layout">
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h3>탤런트</h3>
+            </div>
+            <ul id="channel-list" class="channel-nav">
+                <!-- Channel list injected here -->
+            </ul>
+        </aside>
+
+        <main class="main-content">
+            <div class="search-container">
+                <div class="search-wrapper">
+                    <input type="text" id="search-input" placeholder="검색어를 입력하세요...">
+                    <button id="search-btn">🔍</button>
+                </div>
+            </div>
+
+            <!-- 검색 필터 드롭다운 패널 (탭 구조: 콜라보 / 날짜) -->
+            <div id="search-filter-panel" class="search-filter-panel">
+                <!-- 탭 헤더 -->
+                <div class="filter-tabs">
+                    <button class="filter-tab active" data-tab="collab">콜라보</button>
+                    <button class="filter-tab" data-tab="date">날짜</button>
+                </div>
+
+                <!-- 콜라보 필터 탭 -->
+                <div id="collab-filter-tab" class="filter-tab-content active">
+                    <div class="filter-header">
+                        <div class="filter-actions">
+                            <select id="collab-filter-mode" class="filter-mode-select"
+                                title="OR: 한 명이라도 포함 / AND: 전부 포함">
+                                <option value="or">OR</option>
+                                <option value="and">AND</option>
+                            </select>
+                            <button id="clear-filter-btn" class="clear-filter-btn">초기화</button>
+                            <button id="apply-filter-btn" class="apply-filter-btn">적용</button>
+                        </div>
+                    </div>
+                    <div id="collab-generation-list" class="collab-generation-list">
+                        <!-- 기수별 체크박스 리스트 동적 생성 -->
+                    </div>
+                </div>
+
+                <!-- 날짜 필터 탭 -->
+                <div id="date-filter-tab" class="filter-tab-content">
+                    <div class="filter-header">
+                        <div class="filter-actions">
+                            <button id="clear-date-btn" class="clear-filter-btn">초기화</button>
+                            <button id="apply-date-btn" class="apply-filter-btn">적용</button>
+                        </div>
+                    </div>
+                    <div class="date-filter-body">
+                        <!-- 년/월 빠른 선택 UI -->
+                        <div class="quick-date-selector">
+                            <!-- 년도 선택 -->
+                            <div class="year-selector">
+                                <button class="year-nav-btn" id="prev-year-btn">◀</button>
+                                <div class="year-buttons" id="year-buttons">
+                                    <!-- JS에서 동적 생성 -->
+                                </div>
+                                <button class="year-nav-btn" id="next-year-btn">▶</button>
+                            </div>
+                            <!-- 월 선택 -->
+                            <div class="month-selector" id="month-selector">
+                                <button class="month-btn" data-month="1">1월</button>
+                                <button class="month-btn" data-month="2">2월</button>
+                                <button class="month-btn" data-month="3">3월</button>
+                                <button class="month-btn" data-month="4">4월</button>
+                                <button class="month-btn" data-month="5">5월</button>
+                                <button class="month-btn" data-month="6">6월</button>
+                                <button class="month-btn" data-month="7">7월</button>
+                                <button class="month-btn" data-month="8">8월</button>
+                                <button class="month-btn" data-month="9">9월</button>
+                                <button class="month-btn" data-month="10">10월</button>
+                                <button class="month-btn" data-month="11">11월</button>
+                                <button class="month-btn" data-month="12">12월</button>
+                            </div>
+                        </div>
+                        <!-- Flatpickr 인라인 달력 -->
+                        <div id="date-picker-container"></div>
+                        <div class="selected-dates-display">
+                            <span class="selected-dates-label">선택된 날짜:</span>
+                            <div id="selected-dates-list" class="selected-dates-list">
+                                <span class="no-dates">날짜를 선택하세요</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HOME VIEW -->
+            <div id="home-view" class="view-section active">
+                <section class="hero-section">
+                    <div class="profile-card">
+                        <div class="profile-image-wrapper">
+                            <a id="channel-link" href="#" target="_blank" rel="noopener noreferrer"
+                                style="display:block;">
+                                <img id="channel-icon" src="" alt="채널 아이콘" class="profile-image">
+                            </a>
+                        </div>
+                        <div class="profile-info">
+                            <h2 id="channel-name">로딩 중...</h2>
+                            <p id="channel-desc" class="channel-desc">채널 정보를 가져오는 중...</p>
+                            <div class="stats">
+                                <div class="stat-item">
+                                    <span class="stat-value" id="sub-count">-</span>
+                                    <span class="stat-label">구독자</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-value" id="video-count">-</span>
+                                    <span class="stat-label">영상</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <div class="dashboard-summary">
+                    <div class="section-header">
+                        <h3><span class="icon">👋</span> 환영합니다</h3>
+                    </div>
+                    <p>탭을 선택해주세요.</p>
+                </div>
+            </div>
+
+            <!-- LIVE VIEW -->
+            <div id="live-view" class="view-section" style="display: none;">
+                <div class="section-header">
+                    <h3><span class="icon">🔴</span> 라이브 & 예정</h3>
+                </div>
+                <div id="live-container" class="video-grid">
+                    <div class="loading-spinner">스트림 로딩 중...</div>
+                </div>
+            </div>
+
+            <div id="archive-view" class="view-section" style="display: none;">
+                <!-- 아카이브 헤더 + 탭 (같은 줄) -->
+                <div class="archive-header-row">
+                    <div class="section-header">
+                        <h3><span class="icon">📚</span> 아카이브</h3>
+                    </div>
+                    <div class="archive-tabs" id="archive-tabs">
+                        <button class="archive-tab active" data-type="all">아카이브</button>
+                        <button class="archive-tab" data-type="music">노래</button>
+                    </div>
+                </div>
+                <div id="archive-container" class="video-grid">
+                    <div class="loading-spinner">아카이브 로딩 중...</div>
+                </div>
+                <div class="pagination-controls" id="archive-pagination">
+                    <!-- Pagination injected here -->
+                </div>
+            </div>
+
+            <!-- CLIPS VIEW -->
+            <div id="clips-view" class="view-section" style="display: none;">
+                <div class="section-header clips-header">
+                    <h3><span class="icon">✂️</span> 키리누키</h3>
+                    <div class="lang-filter">
+                        <select id="clip-lang-select">
+                            <option value="all">전체 언어</option>
+                            <option value="ja">日本語</option>
+                            <option value="ko">한국어</option>
+                            <option value="en">English</option>
+                            <option value="zh">中文</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="clips-container" class="video-grid">
+                    <div class="loading-spinner">클립 로딩 중...</div>
+                </div>
+                <div class="pagination-controls" id="clips-pagination">
+                </div>
+            </div>
+
+            <!-- STATS VIEW -->
+            <div id="stats-view" class="view-section" style="display: none;">
+                <div class="section-header">
+                    <h3><span class="icon">📊</span> 통계</h3>
+                </div>
+                <div class="stats-container">
+                    <!-- 년도별 방송 통계 -->
+                    <div class="stats-card">
+                        <h4>년도별 방송 통계</h4>
+                        <canvas id="yearly-chart"></canvas>
+                    </div>
+                    <!-- 월별 멤버십 통계 -->
+                    <div class="stats-card">
+                        <div class="stats-card-header">
+                            <h4>월별 멤버십 통계</h4>
+                            <select id="membership-year-select"></select>
+                        </div>
+                        <canvas id="membership-chart"></canvas>
+                    </div>
+                    <!-- 콜라보 횟수 -->
+                    <div class="stats-card">
+                        <h4>콜라보 횟수 (TOP 10)</h4>
+                        <div id="collab-stats-container" class="collab-stats"></div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 우측 필터 사이드바 -->
+        <aside class="right-sidebar">
+            <div class="right-sidebar-content">
+                <!-- 언아카이브 영상 숨기기 (체크박스) -->
+                <label class="unarchived-toggle" title="언아카이브 영상 숨기기">
+                    <input type="checkbox" id="hide-unarchived-checkbox">
+                    <span>언아카이브</span>
+                </label>
+                <!-- 검색 필터 버튼 -->
+                <button id="filter-btn" class="filter-btn" title="검색 필터">검색 필터</button>
+                <!-- 설정 버튼 -->
+                <button id="settings-btn" class="settings-btn" title="설정">⚙️ 설정</button>
+            </div>
+        </aside>
+    </div>
+
+    <footer class="site-footer">
+        <div class="container">
+            <p><a href="https://holodex.net" target="_blank" rel="noopener noreferrer">Holodex API</a> 기반</p>
+            <p>비공식 팬 사이트</p>
+        </div>
+    </footer>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- API Key Modal -->
+    <div id="api-key-modal" class="modal">
+        <div class="modal-content">
+            <h2>Holodex API Key 필요</h2>
+            <p>※ 키리누키/동기화 기능을 사용하려면 API 키가 필요합니다</p>
+            <p class="sub-text"><a href="https://holodex.net" target="_blank"
+                    rel="noopener noreferrer">Holodex.net</a>에서 키를 발급받으세요
+                (사용자 설정 → API Key)</p>
+
+            <div class="input-group">
+                <input type="text" id="api-key-input" placeholder="API Key를 입력하세요">
+            </div>
+
+            <div class="modal-actions">
+                <button id="save-api-key-btn" class="primary-btn">저장</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 탤런트 관리 모달 -->
+    <div id="channel-settings-modal" class="modal" style="display: none;">
+        <div class="modal-content channel-settings-content">
+            <div class="modal-header">
+                <h2>⚙️ 탤런트 관리</h2>
+                <button id="close-channel-settings" class="close-btn">&times;</button>
+            </div>
+
+            <!-- 채널 검색 -->
+            <div class="channel-search-section">
+                <h3>🔍 채널 검색</h3>
+                <div class="channel-search-row">
+                    <input type="text" id="channel-search-input" placeholder="채널명 입력 (2글자 이상)">
+                    <button id="channel-search-btn" class="primary-btn">검색</button>
+                </div>
+                <div id="channel-search-results" class="channel-search-results">
+                    <!-- 검색 결과 표시 -->
+                </div>
+            </div>
+
+            <!-- 내 채널 목록 -->
+            <div class="my-channels-section">
+                <h3>📋 내 탤런트 (<span id="my-channel-count">0</span>/10)</h3>
+                <ul id="my-channels-list" class="my-channels-list">
+                    <!-- 내 채널 목록 표시 -->
+                </ul>
+            </div>
+
+            <div class="modal-actions channel-modal-actions">
+                <button id="start-sync-btn" class="primary-btn sync-btn">🔄 동기화 시작</button>
+                <p class="sync-hint">탤런트 변경 후 동기화해야 검색/통계에 반영됩니다</p>
+            </div>
+            <div class="modal-secondary-actions">
+                <button id="reset-channels-btn" class="text-btn">↩️ 기본값으로 초기화</button>
+                <span class="separator">·</span>
+                <button id="delete-api-key-btn" class="text-btn danger">🗑️ API 키 삭제</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="src/data/nameMapping.js"></script>
+    <!-- CDN 라이브러리: defer로 파싱 블로킹 방지 -->
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+    <!-- Flatpickr 달력 라이브러리 -->
+    <script defer src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
+    <script src="api.js"></script>
+    <script type="module" src="app.js"></script>
+</body>
+
+</html>
