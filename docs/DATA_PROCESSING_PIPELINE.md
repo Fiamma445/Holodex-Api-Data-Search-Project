@@ -23,7 +23,7 @@ CREATE TABLE videos (
 
 ### 1.2 Data Cleansing
 분석에 방해되는 노이즈 데이터를 SQL 단에서 필터링하여 지표의 신뢰성을 높였습니다.
-- **동적 아카이브(Unarchived) 필터링 통제**: `status = 'missing'` 및 비정상 썸네일 구조(`"topic_id": null`) 데이터는 하드코딩으로 완전히 삭제하지 않고, 프론트엔드 UI의 **'Unarchived 토글 버튼'**과 연동하여 사용자가 켜고 끌 수 있게 동적 필터 로직으로 전환했습니다.
+- **동적 아카이브(Unarchived) 필터링 통제**: `status = 'missing'` 및 비정상 썸네일 구조(`"topic_id": null`) 데이터는 하드코딩으로 완전히 삭제하지 않고, 프론트엔드 UI의 **Unarchived 토글 버튼**과 연동하여 사용자가 켜고 끌 수 있게 동적 필터 로직으로 전환했습니다.
 - **분석 도메인 분리**: 본 목적(게임/방송 통계)을 흐리는 노이즈인 `shorts`, `announce`, `morning` 등의 더미 태그는 SQL 단에서 `NOT IN` 조건으로 일괄 소거했습니다.
 
 ### 1.3 Collaboration 네트워크 통계 추출
