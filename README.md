@@ -52,7 +52,7 @@
   - Railway 서버 배포와 Cloudflare 엣지 캐싱 구성을 Vibe Coding 지시를 통해 완수
   - 배포 환경의 콜드 스타트 지연 문제를 `Cache-Control` 헤더 제어와 JS `Promise.all` 비동기 병렬화로 해결
 
-**[바이브 코딩 아키텍처 및 트러블슈팅 명세서 (TROUBLESHOOTING.md)](./docs/TROUBLESHOOTING.md)**
+**[바이브 코딩 프론트엔드/인프라 트러블슈팅 명세서 (TROUBLESHOOTING.md)](./docs/TROUBLESHOOTING.md)**
 
 ### 3. 결과 및 기대효과
 - **기대효과**
