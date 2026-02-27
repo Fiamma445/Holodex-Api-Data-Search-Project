@@ -3,6 +3,8 @@
 > 홀로라이브 및 개인세 버튜버 데이터 파이프라인 구축 및 동적 탐색 대시보드
 > **(데이터 분석가 핵심 역량 + AI 바이브 코딩 풀스택 확장 포트폴리오)**
 
+🔗 **Live Service**: [https://holo-search.xyz](https://holo-search.xyz/)
+
 ## 요약 파트
 
 ### 1. 프로젝트 개요
@@ -13,12 +15,13 @@
 **핵심 구현 내역**
 - Python 기반 데이터 파이프라인(ETL) 및 데이터 클렌징
 - SQLite JSON1 하이브리드 모델링 및 SQL 다차원 집계 로직
+- 연관 멤버 간 콜라보레이션 순위(Top 30) 및 연도별/월별 방송 트렌드 시각화 대시보드 구축
 - Vibe Coding을 활용한 Vanilla JS SPA 프론트엔드 및 FastAPI 백엔드 구축
 - TDD 프로세스와 커스텀 AI 워크플로우를 강제하여 에이전트 작업 퀄리티 제어
 - Railway 서버 배포 및 Cloudflare 엣지 캐싱 튜닝
 
 ### 2. 결과 및 직무에 적용할 점
-- 정형화가 어려운 다차원 API 데이터를 RDBMS로 가져와 유연하게 파싱하는 **하이브리드 스키마 설계 역량**을 증명했습니다.
+- 정형화가 어려운 다차원 API 데이터를 직접 마이닝하여 **연도별/월별 방송 추이 및 콜라보 네트워크 빈도(Top 30) 등 핵심 통계 지표**를 도출하는 **분석 스키마 설계 역량**을 증명했습니다.
 - 데이터 분석 결과를 단순히 리포트로 남기지 않고, 누구나 직관적으로 탐색할 수 있는 **동적 웹 대시보드로 End-to-End 배포**했습니다.
 - 본업이 아닌 웹 풀스택 영역을 **Vibe Coding**으로 구현해, AI 에이전트를 활용하고 워크플로우를 구축하는 **프롬프트 엔지니어링 역량**을 확보했습니다.
 
@@ -34,8 +37,8 @@
 본 프로젝트의 ETL 파이프라인 구축과 다차원 SQL 집계 처리는 데이터 분석 레이어로 설계하고 구현했습니다.
 
 - **Data Extract & Load**: Holodex API 연동 및 Rate Limit 우회를 처리하는 Python 로직 작성 (Hololive 전 멤버 + 개인세 일부 타겟팅)
-- **Data Transformation**: SQLite JSON1 Extension을 활용한 하이브리드 모델링. 배열 형태로 들어오는 `mentions` 비정형 데이터를 분해하여 노드 가중치 통계로 치환
-- **Data Cleansing**: 결측치(Status: missing) 및 비정상 분류 메타데이터(Shorts, Morning 등 노이즈 태그)를 소거하여 신뢰성 높은 지표 도출
+- **Data Transformation**: SQLite JSON1 Extension을 활용한 하이브리드 모델링. 배열 형태로 들어오는 `mentions` 비정형 데이터를 분해하여 버튜버 간 콜라보 네트워크 노드 가중치 통계로 치환
+- **Data Cleansing**: 비정상 분류 메타데이터(Shorts, Morning 등 더미 태그)를 일괄 소거하여 신뢰성을 높이고, 소실된 아카이브(`status = 'missing'`)는 하드코딩 필터링 대신 UI 토글 조작을 통한 동적 추적 로직으로 통제
 
 **[데이터 전처리 및 분석 파이프라인 명세서 (DATA_PROCESSING_PIPELINE.md)](./docs/DATA_PROCESSING_PIPELINE.md)**
 
