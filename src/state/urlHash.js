@@ -1,14 +1,14 @@
-/**
+﻿/**
  * URL 해시 상태 관리
  * @description 브라우저 히스토리 없이 URL 해시로 앱 상태 저장/복원
  */
 
-import { CHANNELS, DEFAULT_CHANNEL_ID } from '../data/channels.js';
+import { CHANNELS, DEFAULT_CHANNEL_ID } from '../data/channels.js?v=20260510-1';
 
 // 유효한 뷰 목록
-const VALID_VIEWS = ['home', 'live', 'archive', 'clips'];
+const VALID_VIEWS = ['home', 'live', 'archive', 'clips', 'songs', 'stats'];
 // 유효한 비디오 타입 목록
-const VALID_VIDEO_TYPES = ['all', 'music'];
+const VALID_VIDEO_TYPES = ['all', 'collab', 'music'];
 
 /**
  * URL 해시에서 상태 파싱
@@ -31,9 +31,10 @@ export function getStateFromHash() {
  * @param {Object} state - 현재 앱 상태
  */
 export function updateUrlHash(state) {
-    const { currentChannelId, currentView, archivePage, clipsPage, videoType } = state;
+    const { currentChannelId, currentView, archivePage, clipsPage, songsPage, videoType } = state;
     const page = currentView === 'archive' ? archivePage :
-        (currentView === 'clips' ? clipsPage : 1);
+        (currentView === 'clips' ? clipsPage :
+            (currentView === 'songs' ? songsPage : 1));
 
     // 노래 탭일 때만 videoType 파라미터 추가
     const videoTypeParam = (currentView === 'archive' && videoType && videoType !== 'all')
@@ -68,6 +69,9 @@ export function restoreStateFromHash(defaultState) {
         }
         if (restoredState.currentView === 'clips') {
             restoredState.clipsPage = savedState.page;
+        }
+        if (restoredState.currentView === 'songs') {
+            restoredState.songsPage = savedState.page;
         }
     }
 

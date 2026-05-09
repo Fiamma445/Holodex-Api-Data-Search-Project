@@ -15,4 +15,4 @@ cachetools==5.5.2
 aiosqlite==0.21.0
 
 # 고속 JSON 파서
-orjson==3.10.18
+orjson==3.11.6

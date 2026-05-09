@@ -67,12 +67,12 @@ export function updateSyncOverlay(status) {
 
     // 현재 채널명 → 진행 중 표시로 변경
     if (channelNameEl) {
-        channelNameEl.textContent = synced < total ? '🔄 동기화 진행 중...' : '✅ 동기화 완료!';
+        channelNameEl.textContent = synced < total ? '동기화 진행 중...' : '동기화 완료';
     }
 
     // 다운로드 영상 수
     if (videoCountEl) {
-        videoCountEl.textContent = `📥 ${totalVideos.toLocaleString()}개 영상 다운로드`;
+        videoCountEl.textContent = `${totalVideos.toLocaleString()}개 영상 확인`;
     }
 
     // 취소 버튼 이벤트 (한 번만 등록)

@@ -1,14 +1,24 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Hololive Stream Dashboard</title>
-    <link rel="stylesheet" href="style.css">
+    <script>
+        (() => {
+            try {
+                const savedTheme = localStorage.getItem('holo_search_theme');
+                document.documentElement.dataset.theme = savedTheme === 'dark' ? 'dark' : 'light';
+            } catch {
+                document.documentElement.dataset.theme = 'light';
+            }
+        })();
+    </script>
+    <link rel="stylesheet" href="style.css?v=20260510-2">
+    <link rel="stylesheet" href="streaming-theme.css?v=20260510-2">
     <!-- Flatpickr 달력 라이브러리 -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/material_pink.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <!-- 폰트 비동기 로딩: 렌더 블로킹 방지 -->
@@ -36,14 +46,14 @@
                 </svg>
                 <div class="progress-text" id="sync-progress-text">0%</div>
             </div>
-            <h2>초기 동기화</h2>
+            <h2>빠른 갱신</h2>
             <p id="sync-current-channel" class="sync-channel-name">준비 중...</p>
             <p id="sync-status-text">Holodex에 연결 중...</p>
             <div class="progress-bar-container">
                 <div id="sync-progress-fill" class="progress-fill" style="width: 0%"></div>
             </div>
-            <p id="sync-video-count" class="sync-video-count">📥 0개 영상 다운로드</p>
-            <p class="sync-subtext">모든 채널의 영상 히스토리를 가져오는 중입니다.<br>몇 분 정도 소요될 수 있습니다.</p>
+            <p id="sync-video-count" class="sync-video-count">0개 영상 확인</p>
+            <p class="sync-subtext">새로 올라온 영상과 최근 변경분만 확인합니다.<br>전체 DB 구축은 seed DB 생성 작업에서 처리합니다.</p>
             <button id="sync-cancel-btn" class="secondary-btn sync-cancel-btn">취소</button>
         </div>
     </div>
@@ -51,16 +61,27 @@
     <header class="site-header">
         <div class="container">
             <div class="logo-area">
-                <span id="logo-icon" class="logo-icon">🌸</span>
+                <div class="brand-wordmark" role="img" aria-label="Holo Search">
+                    <svg class="brand-symbol" viewBox="0 0 34 30" aria-hidden="true" focusable="false">
+                        <path class="symbol-shadow" d="M5 4L29 15L5 26Z"></path>
+                        <path class="symbol-main" d="M7 5.8L26.7 15L7 24.2Z"></path>
+                        <path class="symbol-cut" d="M10.5 10.5L20.2 15L10.5 19.5Z"></path>
+                    </svg>
+                    <span class="brand-holo">Holo</span><span class="brand-search">Search</span>
+                    <span class="brand-caret"></span>
+                </div>
+                <span id="logo-icon" class="logo-icon"></span>
                 <h1><span id="header-title">Hololive</span> <span class="subtitle">Stream Dashboard</span></h1>
             </div>
             <nav class="main-nav">
-                <a href="#" data-view="home" class="active">홈</a>
-                <a href="#" data-view="live">라이브 & 예정</a>
-                <a href="#" data-view="archive">아카이브</a>
-                <a href="#" data-view="clips">키리누키</a>
-                <a href="#" data-view="stats">통계</a>
+                <a href="#" data-view="home" class="active" data-i18n="nav.home">홈</a>
+                <a href="#" data-view="live" data-i18n="nav.live">라이브 & 예정</a>
+                <a href="#" data-view="archive" data-i18n="nav.archive">아카이브</a>
+                <a href="#" data-view="songs" data-i18n="nav.songs">노래</a>
+                <a href="#" data-view="clips" data-i18n="nav.clips">키리누키</a>
+                <a href="#" data-view="stats" data-i18n="nav.stats">통계</a>
             </nav>
+            <button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">Dark</button>
         </div>
     </header>
 
@@ -77,8 +98,10 @@
         <main class="main-content">
             <div class="search-container">
                 <div class="search-wrapper">
-                    <input type="text" id="search-input" placeholder="검색어를 입력하세요...">
-                    <button id="search-btn">🔍</button>
+                    <input type="text" id="search-input" placeholder="검색어를 입력하세요..." data-i18n-placeholder="search.placeholder">
+                    <button id="search-btn" type="button" aria-label="검색">
+                        <span class="search-icon" aria-hidden="true"></span>
+                    </button>
                 </div>
             </div>
 
@@ -121,11 +144,11 @@
                         <div class="quick-date-selector">
                             <!-- 년도 선택 -->
                             <div class="year-selector">
-                                <button class="year-nav-btn" id="prev-year-btn">◀</button>
+                            <button class="year-nav-btn" id="prev-year-btn">&lsaquo;</button>
                                 <div class="year-buttons" id="year-buttons">
                                     <!-- JS에서 동적 생성 -->
                                 </div>
-                                <button class="year-nav-btn" id="next-year-btn">▶</button>
+                            <button class="year-nav-btn" id="next-year-btn">&rsaquo;</button>
                             </div>
                             <!-- 월 선택 -->
                             <div class="month-selector" id="month-selector">
@@ -160,6 +183,7 @@
                 <section class="hero-section">
                     <div class="profile-card">
                         <div class="profile-image-wrapper">
+                            <span id="profile-live-badge" class="profile-live-badge">LIVE</span>
                             <a id="channel-link" href="#" target="_blank" rel="noopener noreferrer"
                                 style="display:block;">
                                 <img id="channel-icon" src="" alt="채널 아이콘" class="profile-image">
@@ -184,7 +208,7 @@
 
                 <div class="dashboard-summary">
                     <div class="section-header">
-                        <h3><span class="icon">👋</span> 환영합니다</h3>
+                        <h3>환영합니다</h3>
                     </div>
                     <p>탭을 선택해주세요.</p>
                 </div>
@@ -193,7 +217,7 @@
             <!-- LIVE VIEW -->
             <div id="live-view" class="view-section" style="display: none;">
                 <div class="section-header">
-                    <h3><span class="icon">🔴</span> 라이브 & 예정</h3>
+                    <h3>라이브 & 예정</h3>
                 </div>
                 <div id="live-container" class="video-grid">
                     <div class="loading-spinner">스트림 로딩 중...</div>
@@ -204,10 +228,11 @@
                 <!-- 아카이브 헤더 + 탭 (같은 줄) -->
                 <div class="archive-header-row">
                     <div class="section-header">
-                        <h3><span class="icon">📚</span> 아카이브</h3>
+                        <h3>아카이브</h3>
                     </div>
                     <div class="archive-tabs" id="archive-tabs">
                         <button class="archive-tab active" data-type="all">아카이브</button>
+                        <button class="archive-tab" data-type="collab">콜라보</button>
                         <button class="archive-tab" data-type="music">노래</button>
                     </div>
                 </div>
@@ -222,15 +247,24 @@
             <!-- CLIPS VIEW -->
             <div id="clips-view" class="view-section" style="display: none;">
                 <div class="section-header clips-header">
-                    <h3><span class="icon">✂️</span> 키리누키</h3>
-                    <div class="lang-filter">
-                        <select id="clip-lang-select">
-                            <option value="all">전체 언어</option>
-                            <option value="ja">日本語</option>
-                            <option value="ko">한국어</option>
-                            <option value="en">English</option>
-                            <option value="zh">中文</option>
-                        </select>
+                    <h3 data-i18n="clips.title">키리누키</h3>
+                    <div id="clip-language-filter" class="clip-language-filter" role="group" aria-label="키리누키 언어 필터" data-i18n-aria-label="clips.languageFilter">
+                        <label class="clip-language-option">
+                            <input type="checkbox" name="clip-language" value="ja" checked>
+                            <span data-i18n="clipLang.ja">日本語</span>
+                        </label>
+                        <label class="clip-language-option">
+                            <input type="checkbox" name="clip-language" value="ko">
+                            <span data-i18n="clipLang.ko">한국어</span>
+                        </label>
+                        <label class="clip-language-option">
+                            <input type="checkbox" name="clip-language" value="en">
+                            <span data-i18n="clipLang.en">English</span>
+                        </label>
+                        <label class="clip-language-option">
+                            <input type="checkbox" name="clip-language" value="zh">
+                            <span data-i18n="clipLang.zh">中文</span>
+                        </label>
                     </div>
                 </div>
                 <div id="clips-container" class="video-grid">
@@ -240,10 +274,36 @@
                 </div>
             </div>
 
+            <!-- SONGS VIEW -->
+            <div id="songs-view" class="view-section" style="display: none;">
+                <div class="songs-header-row">
+                    <div class="section-header">
+                        <h3>노래 DB</h3>
+                    </div>
+                    <div class="songs-tools">
+                        <select id="song-sort-select" aria-label="노래 정렬">
+                            <option value="recent">최근 방송순</option>
+                            <option value="title">곡명순</option>
+                            <option value="artist">원곡자순</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="song-category-tabs" class="song-category-tabs" aria-label="노래 분류">
+                    <button class="song-category-tab active" type="button" data-category="all">전체 <span data-song-count>0</span></button>
+                    <button class="song-category-tab" type="button" data-category="original">오리지널 곡 <span data-song-count>0</span></button>
+                    <button class="song-category-tab" type="button" data-category="unit_guest">유닛·게스트 <span data-song-count>0</span></button>
+                    <button class="song-category-tab" type="button" data-category="cover">커버곡 <span data-song-count>0</span></button>
+                </div>
+                <div id="songs-container" class="songs-list">
+                    <div class="loading-spinner">노래 로딩 중...</div>
+                </div>
+                <div class="pagination-controls" id="songs-pagination"></div>
+            </div>
+
             <!-- STATS VIEW -->
             <div id="stats-view" class="view-section" style="display: none;">
                 <div class="section-header">
-                    <h3><span class="icon">📊</span> 통계</h3>
+                    <h3>통계</h3>
                 </div>
                 <div class="stats-container">
                     <!-- 년도별 방송 통계 -->
@@ -274,20 +334,35 @@
                 <!-- 언아카이브 영상 숨기기 (체크박스) -->
                 <label class="unarchived-toggle" title="언아카이브 영상 숨기기">
                     <input type="checkbox" id="hide-unarchived-checkbox">
-                    <span>언아카이브</span>
+                    <span data-i18n="sidebar.hideUnarchived">언아카이브</span>
                 </label>
                 <!-- 검색 필터 버튼 -->
-                <button id="filter-btn" class="filter-btn" title="검색 필터">검색 필터</button>
+                <button id="filter-btn" class="filter-btn" title="검색 필터" data-i18n="sidebar.filter" data-i18n-title="sidebar.filter">검색 필터</button>
                 <!-- 설정 버튼 -->
-                <button id="settings-btn" class="settings-btn" title="설정">⚙️ 설정</button>
+                <button id="settings-btn" class="settings-btn" title="설정" data-i18n="sidebar.settings" data-i18n-title="sidebar.settings">설정</button>
+                <div id="song-sidebar-summary" class="song-sidebar-summary" hidden>
+                    <div class="song-sidebar-title" data-i18n="songDb.title">노래 DB</div>
+                    <div class="song-sidebar-row">
+                        <span data-i18n="songDb.segments">곡 구간</span>
+                        <strong id="song-total-count">0</strong>
+                    </div>
+                    <div class="song-sidebar-row">
+                        <span data-i18n="songDb.videos">영상</span>
+                        <strong id="song-video-count">0</strong>
+                    </div>
+                    <div class="song-sidebar-row">
+                        <span data-i18n="songDb.latest">최근 갱신</span>
+                        <strong id="song-latest-date">-</strong>
+                    </div>
+                </div>
             </div>
         </aside>
     </div>
 
     <footer class="site-footer">
         <div class="container">
-            <p><a href="https://holodex.net" target="_blank" rel="noopener noreferrer">Holodex API</a> 기반</p>
-            <p>비공식 팬 사이트</p>
+            <p><a href="https://holodex.net" target="_blank" rel="noopener noreferrer">Holodex API</a> <span data-i18n="footer.holodexBased">기반</span></p>
+            <p data-i18n="footer.fanSite">비공식 팬 사이트</p>
         </div>
     </footer>
 
@@ -296,18 +371,18 @@
     <!-- API Key Modal -->
     <div id="api-key-modal" class="modal">
         <div class="modal-content">
-            <h2>Holodex API Key 필요</h2>
-            <p>※ 키리누키/동기화 기능을 사용하려면 API 키가 필요합니다</p>
+            <h2 data-i18n="apiModal.title">Holodex API Key 필요</h2>
+            <p data-i18n="apiModal.body">키리누키 검색을 사용하려면 API 키가 필요합니다</p>
             <p class="sub-text"><a href="https://holodex.net" target="_blank"
-                    rel="noopener noreferrer">Holodex.net</a>에서 키를 발급받으세요
-                (사용자 설정 → API Key)</p>
+                    rel="noopener noreferrer">Holodex.net</a> <span data-i18n="apiModal.guideSuffix">에서 키를 발급받으세요
+                (사용자 설정 → API Key)</span></p>
 
             <div class="input-group">
-                <input type="text" id="api-key-input" placeholder="API Key를 입력하세요">
+                <input type="text" id="api-key-input" placeholder="API Key를 입력하세요" data-i18n-placeholder="apiModal.inputPlaceholder">
             </div>
 
             <div class="modal-actions">
-                <button id="save-api-key-btn" class="primary-btn">저장</button>
+                <button id="save-api-key-btn" class="primary-btn" data-i18n="apiModal.save">저장</button>
             </div>
         </div>
     </div>
@@ -316,16 +391,34 @@
     <div id="channel-settings-modal" class="modal" style="display: none;">
         <div class="modal-content channel-settings-content">
             <div class="modal-header">
-                <h2>⚙️ 탤런트 관리</h2>
+                <h2 data-i18n="settings.title">탤런트 관리</h2>
                 <button id="close-channel-settings" class="close-btn">&times;</button>
+            </div>
+
+            <div class="app-language-section">
+                <h3 data-i18n="settings.languageTitle">표시 언어</h3>
+                <div id="app-language-options" class="app-language-options">
+                    <label class="app-language-option">
+                        <input type="radio" name="app-language" value="ko" checked>
+                        <span data-i18n="language.ko">한국어</span>
+                    </label>
+                    <label class="app-language-option">
+                        <input type="radio" name="app-language" value="ja">
+                        <span data-i18n="language.ja">日本語</span>
+                    </label>
+                    <label class="app-language-option">
+                        <input type="radio" name="app-language" value="en">
+                        <span data-i18n="language.en">English</span>
+                    </label>
+                </div>
             </div>
 
             <!-- 채널 검색 -->
             <div class="channel-search-section">
-                <h3>🔍 채널 검색</h3>
+                <h3 data-i18n="settings.channelSearch">채널 검색</h3>
                 <div class="channel-search-row">
-                    <input type="text" id="channel-search-input" placeholder="채널명 입력 (2글자 이상)">
-                    <button id="channel-search-btn" class="primary-btn">검색</button>
+                    <input type="text" id="channel-search-input" placeholder="채널명 입력 (2글자 이상)" data-i18n-placeholder="settings.channelPlaceholder">
+                    <button id="channel-search-btn" class="primary-btn" data-i18n="settings.search">검색</button>
                 </div>
                 <div id="channel-search-results" class="channel-search-results">
                     <!-- 검색 결과 표시 -->
@@ -334,33 +427,48 @@
 
             <!-- 내 채널 목록 -->
             <div class="my-channels-section">
-                <h3>📋 내 탤런트 (<span id="my-channel-count">0</span>/10)</h3>
+                <h3><span data-i18n="settings.myTalents">내 탤런트</span> <span id="my-channel-count">0</span></h3>
                 <ul id="my-channels-list" class="my-channels-list">
                     <!-- 내 채널 목록 표시 -->
                 </ul>
             </div>
 
             <div class="modal-actions channel-modal-actions">
-                <button id="start-sync-btn" class="primary-btn sync-btn">🔄 동기화 시작</button>
-                <p class="sync-hint">탤런트 변경 후 동기화해야 검색/통계에 반영됩니다</p>
+                <p class="sync-hint" data-i18n="settings.syncHint">탤런트 목록 변경은 바로 화면에 반영됩니다. 새 데이터는 서버에서 주기적으로 자동 갱신됩니다</p>
             </div>
             <div class="modal-secondary-actions">
-                <button id="reset-channels-btn" class="text-btn">↩️ 기본값으로 초기화</button>
+                <button id="reset-channels-btn" class="text-btn" data-i18n="settings.resetDefault">기본값으로 초기화</button>
                 <span class="separator">·</span>
-                <button id="delete-api-key-btn" class="text-btn danger">🗑️ API 키 삭제</button>
+                <button id="delete-api-key-btn" class="text-btn danger">API 키 삭제</button>
             </div>
         </div>
     </div>
 
-    <script type="module" src="src/data/nameMapping.js"></script>
+    <div id="song-detail-modal" class="modal" aria-hidden="true">
+        <div class="modal-content song-detail-content" role="dialog" aria-modal="true" aria-labelledby="song-detail-title">
+            <div class="modal-header song-detail-header">
+                <div>
+                    <h2 id="song-detail-title">노래 상세</h2>
+                    <p id="song-detail-subtitle" class="song-detail-subtitle"></p>
+                </div>
+                <button id="close-song-detail" class="close-btn" type="button" aria-label="닫기">&times;</button>
+            </div>
+            <div class="song-detail-toolbar">
+                <span id="song-detail-count"></span>
+            </div>
+            <div id="song-detail-list" class="song-detail-list"></div>
+        </div>
+    </div>
+
+    <script type="module" src="src/data/nameMapping.js?v=20260510-1"></script>
     <!-- CDN 라이브러리: defer로 파싱 블로킹 방지 -->
     <script defer src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
     <!-- Flatpickr 달력 라이브러리 -->
     <script defer src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/ko.js"></script>
-    <script src="api.js"></script>
-    <script type="module" src="app.js"></script>
+    <script src="api.js?v=20260510-3"></script>
+    <script type="module" src="app.js?v=20260510-4"></script>
 </body>
 
 </html>

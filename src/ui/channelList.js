@@ -1,9 +1,11 @@
-/**
+﻿/**
  * 채널 리스트 컴포넌트
  * @description 사이드바 채널 목록 렌더링
  */
 
-import { CHANNELS, getMyChannels } from '../data/channels.js';
+import { CHANNELS, getMyChannels } from '../data/channels.js?v=20260510-1';
+import { getMemberPhotoUrl, getRemoteMemberPhotoUrl } from '../data/memberPhotos.js?v=20260510-1';
+import { getLocalizedTalentName } from '../data/localizedNames.js?v=20260510-1';
 
 /**
  * 채널 리스트 렌더링
@@ -27,13 +29,33 @@ export function renderChannelList(onChannelSelect) {
         a.className = 'channel-link';
         a.dataset.id = channel.id;
 
-        // 아이콘 URL (없으면 첫 글자로 대체)
-        const iconUrl = channel.icon || `https://via.placeholder.com/40?text=${channel.name.charAt(0)}`;
+        // 로컬 아이콘을 먼저 사용한다
+        const iconUrl = getMemberPhotoUrl(channel) || channel.icon || getRemoteMemberPhotoUrl(channel);
+        const fallback = getRemoteMemberPhotoUrl(channel) || channel.icon || '';
+        const displayName = getLocalizedTalentName(channel);
 
-        a.innerHTML = `
-            <img src="${iconUrl}" alt="${channel.name}" class="nav-icon" onerror="this.src='image/miko.jpg'">
-            <span class="nav-name">${channel.name}</span>
-        `;
+        if (iconUrl) {
+            const img = document.createElement('img');
+            img.src = iconUrl;
+            img.alt = displayName;
+            img.className = 'nav-icon';
+            img.dataset.fallback = fallback;
+            img.addEventListener('error', () => {
+                const fallbackUrl = img.dataset.fallback || '';
+                if (fallbackUrl && img.src !== new URL(fallbackUrl, window.location.origin).href) {
+                    img.dataset.fallback = '';
+                    img.src = fallbackUrl;
+                    return;
+                }
+                img.remove();
+            });
+            a.appendChild(img);
+        }
+
+        const name = document.createElement('span');
+        name.className = 'nav-name';
+        name.textContent = displayName;
+        a.appendChild(name);
 
         a.addEventListener('click', (e) => {
             e.preventDefault();
@@ -50,11 +72,18 @@ export function renderChannelList(onChannelSelect) {
  * @param {string} channelId - 활성화할 채널 ID
  */
 export function updateActiveChannel(channelId) {
+    let activeLink = null;
     document.querySelectorAll('.channel-link').forEach(link => {
         link.classList.remove('active');
         if (link.dataset.id === channelId) {
             link.classList.add('active');
+            activeLink = link;
         }
+    });
+
+    activeLink?.scrollIntoView({
+        block: 'nearest',
+        inline: 'nearest'
     });
 }
 

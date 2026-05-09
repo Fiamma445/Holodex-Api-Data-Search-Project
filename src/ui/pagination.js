@@ -1,10 +1,10 @@
-/**
+﻿/**
  * 페이지네이션 컴포넌트
  * @description 아카이브/클립 목록 페이지네이션
  */
 
-import { getState, setState } from '../state/appState.js';
-import { updateUrlHash } from '../state/urlHash.js';
+import { getState, setState } from '../state/appState.js?v=20260510-1';
+import { updateUrlHash } from '../state/urlHash.js?v=20260510-1';
 
 // 페이지당 아이템 수
 const ITEMS_PER_PAGE = 32;

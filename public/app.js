@@ -1,149 +1,99 @@
-/**
- * HoloProject - 메인 애플리케이션
- * @description VTuber 방송 아카이브 뷰어
- * @version 2.0.0 (리팩토링 버전)
+﻿/**
+ *
+ *
+ *
  */
 
-// === 모듈 임포트 ===
 import {
     CHANNELS, DEFAULT_CHANNEL_ID, getDefaultChannelId, getChannelById,
     getMyChannels, saveMyChannels, addChannel, removeChannel,
-    DEFAULT_CHANNELS, MAX_CHANNELS
-} from './src/data/channels.js';
-import { getState, setState, INITIAL_STATE } from './src/state/appState.js';
-import { getStateFromHash, updateUrlHash, restoreStateFromHash } from './src/state/urlHash.js';
-import { showToast, requestNotificationPermission } from './src/ui/toast.js';
-import { showSyncOverlay, hideSyncOverlay, updateSyncOverlay } from './src/ui/syncOverlay.js';
-import { createVideoCard } from './src/ui/videoCard.js';
-import { renderChannelList, updateActiveChannel, applyChannelTheme } from './src/ui/channelList.js';
-import { renderPagination, ITEMS_PER_PAGE } from './src/ui/pagination.js';
+    DEFAULT_CHANNELS
+} from './src/data/channels.js?v=20260510-1';
+import { getState, setState, INITIAL_STATE, getPersistedState } from './src/state/appState.js?v=20260510-1';
+import { getStateFromHash, updateUrlHash, restoreStateFromHash } from './src/state/urlHash.js?v=20260510-1';
+import { showToast } from './src/ui/toast.js?v=20260510-1';
+import { showSyncOverlay, hideSyncOverlay, updateSyncOverlay } from './src/ui/syncOverlay.js?v=20260510-1';
+import { createVideoCard } from './src/ui/videoCard.js?v=20260510-1';
+import { createSongCard } from './src/ui/songCard.js?v=20260510-1';
+import { renderChannelList, updateActiveChannel, applyChannelTheme } from './src/ui/channelList.js?v=20260510-1';
+import { renderPagination, ITEMS_PER_PAGE } from './src/ui/pagination.js?v=20260510-1';
+import { getChannelImageProxyUrl, getMemberPhotoUrl, getRemoteMemberPhotoUrl } from './src/data/memberPhotos.js?v=20260510-1';
+import { applyLocale, getLocale, setLocale, t } from './src/data/i18n.js?v=20260510-4';
+import { getLocalizedGenerationName, getLocalizedTalentName } from './src/data/localizedNames.js?v=20260510-1';
 
-// === 인터벌 참조 (메모리 누수 방지) ===
 let refreshInterval = null;
 let syncPollInterval = null;
-let pollingInterval = null;
-let knownStreamIds = new Set();
+const THEME_STORAGE_KEY = 'holo_search_theme';
 
-// === 폴링 보호 플래그 ===
 let isAutoRefreshInFlight = false;
-let isLivePollingInFlight = false;
 let visibilityHandler = null;
 
-// === 요청 중복/역전 방지 ===
 const requestSerials = {
     live: 0,
     archive: 0,
-    clips: 0
+    clips: 0,
+    songs: 0
 };
+let songDetailSerial = 0;
 
-// === 초기화 ===
+// === 珥덇린??===
 function init() {
-    // API Key 확인
     checkApiKey();
 
-    // URL 해시에서 상태 복원
-    const restoredState = restoreStateFromHash(INITIAL_STATE);
+    const restoredState = {
+        ...restoreStateFromHash(INITIAL_STATE),
+        ...getPersistedState()
+    };
     setState(restoredState);
 
-    // UI 초기화
+    // UI 珥덇린??
     renderChannelList(selectChannel);
     setupNavigation();
     setupSearch();
-    setupCollabFilter();  // 콜라보 필터 셋업
+    setupCollabFilter();
     setupApiKeyModal();
-    setupArchiveTabs();  // 아카이브/노래 탭 셋업
+    setupSongControls();
+    setupSongDetailModal();
+    setupArchiveTabs();
+    setupThemeToggle();
+    setupAppLanguageControls();
 
-    // 채널 정보 사전 로드 (배치)
-    prefetchChannelInfo();
-
-    // 초기 채널 선택 (내 탤런트 목록의 첫 번째) - 페이지 유지 (URL hash에서 복원됨)
     const state = getState();
     const initialChannelId = state.currentChannelId || getDefaultChannelId();
     selectChannel(initialChannelId, { preservePage: true });
 
-    // 복원된 뷰로 전환
     if (state.currentView !== 'home') {
         switchView(state.currentView);
     }
 
-    // 노래 탭 UI 복원 (videoType이 music이면)
-    if (state.videoType === 'music') {
-        restoreArchiveTabUI('music');
-    }
+    restoreArchiveTabUI(state.videoType || 'all');
 
-    // 자동 새로고침 시작
     startAutoRefresh();
 
-    // 알림 권한 요청
-    requestNotificationPermission();
-
-    // 언어 필터 설정
     setupLangFilter();
 
-    // 라이브 폴링 시작
-    startLivePolling();
-
-    // 탭 가시성 변경 핸들러 설정
     setupVisibilityHandler();
 
-    // 탤런트 설정 모달 초기화
     setupChannelSettings();
 }
 
-// === 채널 정보 사전 로드 (콜라보 필터 멤버 포함) ===
-async function prefetchChannelInfo() {
-    // API Key 없으면 스킵
-    const apiKey = localStorage.getItem('holodex_api_key');
-    if (!apiKey) return;
-
-    // CHANNELS + 콜라보 필터 모든 멤버 ID 합치기
-    const channelIds = CHANNELS.map(c => c.id);
-    const collabMemberIds = getAllMemberChannelIds ? getAllMemberChannelIds() : [];
-    const allChannelIds = [...new Set([...channelIds, ...collabMemberIds])];
-
-    console.log('📦 Prefetching channel info for', allChannelIds.length, 'channels');
-
-    try {
-        const channels = await getChannelsInfo(allChannelIds);
-        if (channels && channels.length > 0) {
-            channels.forEach(info => {
-                // 로컬 스토리지 캐시에 저장
-                const cacheKey = `channel_info_${info.id}`;
-                const cacheDuration = 24 * 60 * 60 * 1000; // 24시간
-                localStorage.setItem(cacheKey, JSON.stringify({
-                    data: info,
-                    expiry: Date.now() + cacheDuration
-                }));
-            });
-
-            console.log('✅ Prefetched', channels.length, 'channel infos to localStorage');
-
-            // 현재 채널 정보 새로고침
-            const state = getState();
-            if (state.currentChannelId) {
-                loadChannelInfo(state.currentChannelId);
-            }
+function checkApiKey() {
+    getSyncStatus().then(status => {
+        if (status.isSyncing) {
+            showSyncOverlay();
+            startSyncPolling(true);
         }
-    } catch (e) {
-        console.warn('⚠️ Prefetch failed:', e);
-        // 사전 로드 실패 시 무시 (나중에 개별 로드)
-    }
+    });
 }
 
-// === API Key 관리 ===
-function checkApiKey() {
-    const apiKey = localStorage.getItem('holodex_api_key');
-    if (!apiKey) {
-        document.getElementById('api-key-modal').classList.add('show');
-    } else {
-        // 동기화 상태 확인
-        getSyncStatus().then(status => {
-            if (status.isSyncing) {
-                showSyncOverlay();
-                startSyncPolling(true);
-            }
-        });
-    }
+function hasUserApiKey() {
+    return Boolean(localStorage.getItem('holodex_api_key'));
+}
+
+function isClipsViewActive() {
+    const clipsView = document.getElementById('clips-view');
+    const isClipsVisible = clipsView && clipsView.style.display !== 'none';
+    return getState().currentView === 'clips' && Boolean(isClipsVisible);
 }
 
 function setupApiKeyModal() {
@@ -152,25 +102,52 @@ function setupApiKeyModal() {
     const saveBtn = document.getElementById('save-api-key-btn');
     const settingsBtn = document.getElementById('settings-btn');
     const channelSettingsModal = document.getElementById('channel-settings-modal');
+    let returnToSettingsAfterSave = false;
 
-    // API 키 저장 버튼 → 저장 후 탤런트 모달로 이동
+    const closeApiKeyModal = () => {
+        if (!modal) return;
+        modal.classList.remove('show');
+        const shouldReturnToSettings = returnToSettingsAfterSave;
+        returnToSettingsAfterSave = false;
+        if (shouldReturnToSettings && channelSettingsModal) {
+            channelSettingsModal.style.display = 'flex';
+            channelSettingsModal.dispatchEvent(new CustomEvent('open'));
+        }
+    };
+
+    const closeApiKeyModalFromBackdrop = (event) => {
+        if (event.target !== modal) return;
+        if (event.type === 'contextmenu') event.preventDefault();
+        closeApiKeyModal();
+    };
+
+    const openApiKeyModal = (options = {}) => {
+        const force = options.force === true;
+        if (!force && !isClipsViewActive()) return false;
+        if (!modal) return false;
+        returnToSettingsAfterSave = options.returnToSettings === true;
+        if (returnToSettingsAfterSave && channelSettingsModal) {
+            channelSettingsModal.style.display = 'none';
+        }
+        if (input) input.value = localStorage.getItem('holodex_api_key') || '';
+        modal.classList.add('show');
+        setTimeout(() => input?.focus(), 0);
+        return true;
+    };
+
+    window.openApiKeyModal = openApiKeyModal;
+
     if (saveBtn) {
         saveBtn.addEventListener('click', () => {
             const key = input.value.trim();
             if (key) {
                 localStorage.setItem('holodex_api_key', key);
-                modal.classList.remove('show');
+                window.dispatchEvent(new CustomEvent('api-key-updated'));
+                closeApiKeyModal();
 
-                // 기본 채널이 없으면 자동 초기화
                 const myChannels = getMyChannels();
                 if (myChannels.length === 0) {
                     saveMyChannels([...DEFAULT_CHANNELS]);
-                }
-
-                // 탤런트 모달 열기
-                if (channelSettingsModal) {
-                    channelSettingsModal.style.display = 'flex';
-                    channelSettingsModal.dispatchEvent(new CustomEvent('open'));
                 }
             } else {
                 alert('API Key를 입력해주세요.');
@@ -178,39 +155,31 @@ function setupApiKeyModal() {
         });
     }
 
-    // 설정 버튼 → API 키 있으면 탤런트 모달, 없으면 API 모달
     if (settingsBtn) {
         settingsBtn.addEventListener('click', () => {
-            const currentKey = localStorage.getItem('holodex_api_key');
-
-            if (currentKey) {
-                // API 키 있으면 탤런트 관리 모달 열기
-                if (channelSettingsModal) {
-                    channelSettingsModal.style.display = 'flex';
-                }
-            } else {
-                // API 키 없으면 API 입력 모달 열기
-                input.value = '';
-                modal.classList.add('show');
+            if (channelSettingsModal) {
+                channelSettingsModal.style.display = 'flex';
+                channelSettingsModal.dispatchEvent(new CustomEvent('open'));
             }
         });
     }
 
-    // 모달 외부 클릭 시 닫기 (API 키 있을 때만)
     if (modal) {
-        modal.addEventListener('click', (e) => {
-            if (e.target === modal && localStorage.getItem('holodex_api_key')) {
-                modal.classList.remove('show');
-            }
-        });
+        modal.addEventListener('click', closeApiKeyModalFromBackdrop);
+        modal.addEventListener('contextmenu', closeApiKeyModalFromBackdrop);
     }
 }
 
-async function startFullSync(apiKey) {
+async function startQuickSync() {
+    const apiKey = localStorage.getItem('holodex_api_key') || '';
+    if (!apiKey) {
+        window.openApiKeyModal?.({ force: true, returnToSettings: true });
+        return;
+    }
+
     showSyncOverlay();
     setState({ isSyncing: true });
 
-    // 현재 사용자가 선택한 채널 목록 가져오기 (ID + 이름)
     const myChannels = getMyChannels();
     const channelList = myChannels.map(ch => ({
         id: ch.id,
@@ -221,29 +190,31 @@ async function startFullSync(apiKey) {
         const res = await fetch('/api/sync', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
-                'X-APIKEY': apiKey
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({
+                fullSync: false,
                 apiKey,
-                fullSync: true,
-                channels: channelList  // ID + 이름 전달
+                channels: channelList
             })
         });
 
         if (res.ok) {
             startSyncPolling(true);
+        } else if (res.status === 409) {
+            startSyncPolling(true);
         } else {
-            alert('동기화 시작에 실패했습니다.');
             hideSyncOverlay();
+            setState({ isSyncing: false });
+            alert('동기화를 시작하지 못했습니다. API 키와 서버 설정을 확인해주세요.');
         }
     } catch {
-        alert('동기화 시작 중 오류가 발생했습니다.');
         hideSyncOverlay();
+        setState({ isSyncing: false });
+        alert('동기화 시작 중 오류가 발생했습니다.');
     }
 }
 
-// === 동기화 폴링 ===
 function clearSyncPolling() {
     if (syncPollInterval) {
         clearInterval(syncPollInterval);
@@ -253,7 +224,7 @@ function clearSyncPolling() {
 }
 
 function startSyncPolling(isInitialSync = false) {
-    if (syncPollInterval) return; // 이미 폴링 중
+    if (syncPollInterval) return;
 
     let isFirstCheck = true;
 
@@ -266,12 +237,10 @@ function startSyncPolling(isInitialSync = false) {
         setState({ isSyncing: status.isSyncing });
 
         if (status.isSyncing) {
-            // 오버레이 업데이트
             if (isInitialSync) {
                 updateSyncOverlay(status);
             }
 
-            // 검색 비활성화
             if (searchInput) {
                 searchInput.disabled = true;
                 searchInput.placeholder = `동기화 중... (${status.syncedChannels}/${status.totalChannels})`;
@@ -281,7 +250,6 @@ function startSyncPolling(isInitialSync = false) {
                 searchBtn.style.opacity = '0.5';
             }
         } else {
-            // 동기화 완료 또는 처음부터 동기화 중 아님
             if (wasSyncing || (isFirstCheck && isInitialSync)) {
                 if (isInitialSync) {
                     updateSyncOverlay({
@@ -294,21 +262,19 @@ function startSyncPolling(isInitialSync = false) {
                     setTimeout(() => {
                         hideSyncOverlay();
                         if (wasSyncing) {
-                            alert(`동기화 완료! ${(status.totalVideos || 0).toLocaleString()}개의 영상이 다운로드되었습니다.`);
+                            alert('동기화 완료! ' + (status.totalVideos || 0).toLocaleString() + '개의 영상을 다운로드했습니다');
                             location.reload();
                         } else if (isFirstCheck) {
-                            showToast("동기화 완료", "이미 모든 데이터가 최신 상태입니다.", "image/fubuki.jpg");
+                            showToast("동기화 완료", "이미 모든 데이터가 최신 상태입니다", "image/fubuki.jpg");
                         }
                     }, 500);
                 } else if (wasSyncing) {
-                    showToast("동기화 완료", "모든 히스토리가 다운로드되었습니다.", "image/fubuki.jpg");
+                    showToast("동기화 완료", "모든 히스토리가 다운로드되었습니다", "image/fubuki.jpg");
                 }
             }
 
-            // 동기화 중이 아니면 폴링 즉시 중단
             clearSyncPolling();
 
-            // 검색 활성화
             if (searchInput) {
                 searchInput.disabled = false;
                 searchInput.placeholder = "검색어를 입력하세요...";
@@ -326,7 +292,43 @@ function startSyncPolling(isInitialSync = false) {
     syncPollInterval = setInterval(checkStatus, 1000);
 }
 
-// === 네비게이션 ===
+function getInitialTheme() {
+    try {
+        return localStorage.getItem(THEME_STORAGE_KEY) === 'dark' ? 'dark' : 'light';
+    } catch {
+        return 'light';
+    }
+}
+
+function applyTheme(theme) {
+    const normalizedTheme = theme === 'dark' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = normalizedTheme;
+
+    const toggle = document.getElementById('theme-toggle');
+    if (toggle) {
+        const isDark = normalizedTheme === 'dark';
+        toggle.textContent = isDark ? 'Light' : 'Dark';
+        toggle.setAttribute('aria-pressed', String(isDark));
+        toggle.setAttribute('aria-label', isDark ? '라이트 모드로 전환' : '다크 모드로 전환');
+    }
+}
+
+function setupThemeToggle() {
+    applyTheme(getInitialTheme());
+
+    const toggle = document.getElementById('theme-toggle');
+    if (!toggle) return;
+
+    toggle.addEventListener('click', () => {
+        const nextTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+        try {
+            localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+        } catch {
+        }
+        applyTheme(nextTheme);
+    });
+}
+
 function setupNavigation() {
     const navButtons = document.querySelectorAll('.main-nav a');
     navButtons.forEach(btn => {
@@ -339,99 +341,261 @@ function setupNavigation() {
 }
 
 function switchView(viewName) {
+    const previousView = getState().currentView;
+    const isViewChange = previousView !== viewName;
+    if (isViewChange) {
+        resetActiveFilters({ resetSearch: true, resetArchiveType: true });
+    }
+
     setState({ currentView: viewName });
 
-    // 모든 뷰 숨기기
     document.querySelectorAll('.view-section').forEach(section => {
         section.style.display = 'none';
     });
 
-    // 네비게이션 버튼 활성 상태 제거
     document.querySelectorAll('.main-nav a').forEach(btn => {
         btn.classList.remove('active');
     });
 
-    // 대상 뷰 표시
     const targetSection = document.getElementById(`${viewName}-view`);
     if (targetSection) {
         targetSection.style.display = 'block';
     }
 
-    // 활성 버튼 표시
     const activeBtn = document.querySelector(`.main-nav a[data-view="${viewName}"]`);
     if (activeBtn) {
         activeBtn.classList.add('active');
     }
 
-    // 아카이브 탭에서만 표시할 요소들 (설정 버튼 제외)
     const unarchivedToggle = document.querySelector('.unarchived-toggle');
     const filterBtn = document.getElementById('filter-btn');
+    const songSummary = document.getElementById('song-sidebar-summary');
+    const isFilterableView = viewName === 'archive' || viewName === 'songs';
 
     if (viewName === 'archive') {
         if (unarchivedToggle) unarchivedToggle.style.display = 'flex';
-        if (filterBtn) filterBtn.style.display = 'block';
     } else {
         if (unarchivedToggle) unarchivedToggle.style.display = 'none';
-        if (filterBtn) filterBtn.style.display = 'none';
-        // 아카이브 탭이 아닐 때 필터 초기화
-        resetAllFilters();
     }
 
-    // 아카이브 뷰에서는 동기화 폴링 불필요 (초기 동기화 시에만 필요)
+    if (isFilterableView) {
+        if (filterBtn) filterBtn.style.display = 'block';
+        updateFilterPanelMode(viewName);
+    } else {
+        if (filterBtn) filterBtn.style.display = 'none';
+        resetAllFilters();
+    }
+    if (songSummary) {
+        songSummary.hidden = viewName !== 'songs';
+    }
 
-    // 뷰 데이터 로드
+
     loadViewData(viewName);
 
-    // URL 해시 업데이트
     const state = getState();
     updateUrlHash(state);
 }
 
-// === 필터 초기화 함수 ===
-function resetAllFilters() {
-    // 검색어 초기화
-    const searchInput = document.getElementById('search-input');
-    if (searchInput) searchInput.value = '';
-
-    // 언아카이브 체크박스 초기화
+function resetFilterControls() {
     const unarchivedCheckbox = document.getElementById('hide-unarchived-checkbox');
+    const unarchivedLabel = unarchivedCheckbox?.closest('.unarchived-toggle');
     if (unarchivedCheckbox) unarchivedCheckbox.checked = false;
+    unarchivedLabel?.classList.remove('active');
 
-    // 콜라보 필터 초기화
     const collabCheckboxes = document.querySelectorAll('#collab-generation-list input[type="checkbox"]');
-    collabCheckboxes.forEach(cb => cb.checked = false);
+    collabCheckboxes.forEach(cb => {
+        cb.checked = false;
+        cb.closest('.member-item')?.classList.remove('checked');
+    });
 
-    // 날짜 필터 초기화
+    const modeSelect = document.getElementById('collab-filter-mode');
+    if (modeSelect) modeSelect.value = 'or';
+    updateFilterButtonState([]);
+
     const yearBtns = document.querySelectorAll('.year-btn');
     yearBtns.forEach(btn => btn.classList.remove('selected'));
 
     const monthBtns = document.querySelectorAll('.month-btn');
     monthBtns.forEach(btn => btn.classList.remove('selected'));
 
-    // 필터 패널 닫기
+    selectedDates = [];
+    clearQuickDateSelection();
+    if (datePickerInstance) {
+        datePickerInstance.clear();
+    }
+    updateSelectedDatesDisplay();
+
     const filterPanel = document.getElementById('search-filter-panel');
-    if (filterPanel) filterPanel.style.display = 'none';
+    if (filterPanel) {
+        filterPanel.classList.remove('show');
+        filterPanel.style.display = 'none';
+    }
+}
 
-    // 상태 초기화
-    setState({
-        currentSearchQuery: '',
-        collabFilter: '',
-        collabMode: 'or',
-        hideUnarchived: false,
-        filterDates: [],
-        filterYears: [],
-        filterMonths: [],
-        videoType: 'all'
-    });
-
-    // 아카이브 탭 UI 초기화
+function resetArchiveTabControls() {
     const archiveTabs = document.querySelectorAll('.archive-tab');
     archiveTabs.forEach(tab => {
         tab.classList.toggle('active', tab.dataset.type === 'all');
     });
+
+    const sectionHeader = document.querySelector('#archive-view .section-header h3');
+    if (sectionHeader) {
+        sectionHeader.textContent = ARCHIVE_TAB_TITLES.all;
+    }
 }
 
-// === 검색 ===
+function resetActiveFilters(options = {}) {
+    const { resetSearch = false, resetArchiveType = false } = options;
+    if (resetSearch) {
+        const searchInput = document.getElementById('search-input');
+        if (searchInput) searchInput.value = '';
+    }
+
+    resetFilterControls();
+
+    const nextState = {
+        collabFilter: '',
+        collabMode: 'or',
+        hideUnarchived: false,
+        filterDates: [],
+        filterYears: null,
+        filterMonths: null,
+        archivePage: 1,
+        clipsPage: 1,
+        songsPage: 1,
+        songSort: 'recent',
+        songCategory: 'all',
+        clipLangs: ['ja']
+    };
+
+    if (resetSearch) nextState.currentSearchQuery = '';
+    if (resetArchiveType) {
+        nextState.videoType = 'all';
+        resetArchiveTabControls();
+    }
+
+    setState(nextState);
+
+    const sortSelect = document.getElementById('song-sort-select');
+    if (sortSelect) sortSelect.value = 'recent';
+    updateSongCategoryTabs('all');
+    updateClipLanguageOptions(['ja']);
+}
+
+function resetAllFilters() {
+    resetActiveFilters({ resetSearch: true, resetArchiveType: true });
+}
+
+function updateFilterPanelMode(viewName) {
+    const panel = document.getElementById('search-filter-panel');
+    const collabTab = document.querySelector('.filter-tab[data-tab="collab"]');
+    const dateTab = document.querySelector('.filter-tab[data-tab="date"]');
+    const collabContent = document.getElementById('collab-filter-tab');
+    const dateContent = document.getElementById('date-filter-tab');
+    const isSongView = viewName === 'songs';
+
+    panel?.classList.toggle('member-only-filter', isSongView);
+    if (dateTab) dateTab.hidden = isSongView;
+    if (collabTab) collabTab.textContent = isSongView ? t('filter.member') : t('filter.collab');
+
+    if (isSongView) {
+        collabTab?.classList.add('active');
+        dateTab?.classList.remove('active');
+        collabContent?.classList.add('active');
+        dateContent?.classList.remove('active');
+    }
+}
+
+// === 寃??===
+function normalizeCollabFilterMembers(value) {
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (typeof value === 'string' && value.trim()) {
+        return value.split(',').map(item => item.trim()).filter(Boolean);
+    }
+    return [];
+}
+
+function updateFilterButtonState(selectedMembers) {
+    const filterBtn = document.getElementById('filter-btn');
+    if (!filterBtn) return;
+
+    if (selectedMembers.length > 0) {
+        filterBtn.classList.add('active');
+        filterBtn.textContent = t('sidebar.filterCount', { count: selectedMembers.length });
+        return;
+    }
+
+    filterBtn.classList.remove('active');
+    filterBtn.textContent = t('sidebar.filter');
+}
+
+function restoreCollabCheckboxes(selectedMembers) {
+    const selectedSet = new Set(normalizeCollabFilterMembers(selectedMembers));
+    document.querySelectorAll('#collab-generation-list input[type="checkbox"]').forEach(checkbox => {
+        const item = checkbox.closest('.member-item');
+        const keys = [checkbox.value, checkbox.dataset.member, item?.dataset.member].filter(Boolean);
+        checkbox.checked = keys.some(key => selectedSet.has(key));
+        checkbox.closest('.member-item')?.classList.toggle('checked', checkbox.checked);
+    });
+}
+
+function updateMonthButtonsUI() {
+    const container = document.getElementById('month-selector');
+    if (!container) return;
+
+    container.querySelectorAll('.month-btn').forEach(btn => {
+        const month = parseInt(btn.dataset.month, 10);
+        btn.classList.toggle('selected', selectedQuickMonths.includes(month));
+    });
+}
+
+function restoreFilterUiFromState() {
+    const state = getState();
+    const searchInput = document.getElementById('search-input');
+    if (searchInput) {
+        searchInput.value = state.currentSearchQuery || '';
+    }
+
+    const selectedMembers = normalizeCollabFilterMembers(state.collabFilter);
+    restoreCollabCheckboxes(selectedMembers);
+    updateFilterButtonState(selectedMembers);
+
+    const modeSelect = document.getElementById('collab-filter-mode');
+    if (modeSelect) {
+        modeSelect.value = state.collabMode === 'and' ? 'and' : 'or';
+    }
+
+    const unarchivedCheckbox = document.getElementById('hide-unarchived-checkbox');
+    const unarchivedLabel = unarchivedCheckbox?.closest('.unarchived-toggle');
+    if (unarchivedCheckbox) {
+        unarchivedCheckbox.checked = Boolean(state.hideUnarchived);
+        unarchivedLabel?.classList.toggle('active', Boolean(state.hideUnarchived));
+    }
+
+    selectedDates = Array.isArray(state.filterDates) ? [...state.filterDates] : [];
+    selectedQuickYears = Array.isArray(state.filterYears) ? [...state.filterYears] : [];
+    selectedQuickMonths = Array.isArray(state.filterMonths) ? [...state.filterMonths] : [];
+    if (selectedQuickYears.length > 0) {
+        quickSelectBaseYear = Math.min(...selectedQuickYears);
+    }
+    renderYearButtons();
+    updateYearButtonsUI();
+    updateMonthButtonsUI();
+    if (datePickerInstance) {
+        datePickerInstance.setDate(selectedDates, false);
+    }
+    updateSelectedDatesDisplay();
+
+    const sortSelect = document.getElementById('song-sort-select');
+    if (sortSelect) {
+        sortSelect.value = state.songSort || 'recent';
+    }
+    updateSongCategoryTabs(state.songCategory || 'all');
+
+    updateClipLanguageOptions(state.clipLangs || ['ja']);
+    restoreArchiveTabUI(state.videoType || 'all');
+}
+
 function setupSearch() {
     const searchBtn = document.getElementById('search-btn');
     const searchInput = document.getElementById('search-input');
@@ -453,80 +617,28 @@ function setupSearch() {
     }
 }
 
-// === 🔽 콜라보 필터 ===
-// localStorage 기반 아이콘 캐시
 const ICON_CACHE_KEY = 'holodex_member_icons';
-const ICON_CACHE_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7일
+const ICON_CACHE_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7??
 
-// localStorage에서 아이콘 캐시 로드
 function loadIconCache() {
     try {
         const cached = localStorage.getItem(ICON_CACHE_KEY);
         if (cached) {
             const { data, expiry } = JSON.parse(cached);
             if (Date.now() < expiry) {
-                console.log('📦 Loaded icon cache from localStorage:', Object.keys(data).length, 'channels');
                 return data;
             }
         }
     } catch (e) {
-        console.warn('⚠️ Failed to load icon cache:', e);
+        console.warn('Failed to load icon cache:', e);
     }
     return {};
 }
 
-// localStorage에 아이콘 캐시 저장
-function saveIconCache(cache) {
-    try {
-        localStorage.setItem(ICON_CACHE_KEY, JSON.stringify({
-            data: cache,
-            expiry: Date.now() + ICON_CACHE_EXPIRY
-        }));
-        console.log('💾 Saved icon cache to localStorage:', Object.keys(cache).length, 'channels');
-    } catch (e) {
-        console.warn('⚠️ Failed to save icon cache:', e);
-    }
-}
-
-// 전역 채널 아이콘 캐시 (localStorage에서 초기화)
 let memberIconCache = loadIconCache();
 
-// 멤버 아이콘 정보 가져오기 (Holodex API)
-async function fetchMemberIcons(channelIds) {
-    try {
-        // 이미 캐시된 ID는 제외
-        const uncachedIds = channelIds.filter(id => !memberIconCache[id]);
-        if (uncachedIds.length === 0) return;
-
-        console.log('📸 Fetching member icons for', uncachedIds.length, 'channels');
-
-        // Holodex API - 채널 정보 가져오기 (최대 50개씩)
-        const batchSize = 50;
-        for (let i = 0; i < uncachedIds.length; i += batchSize) {
-            const batch = uncachedIds.slice(i, i + batchSize);
-            const channelInfos = await getChannelsInfo(batch);
-
-            if (channelInfos && Array.isArray(channelInfos)) {
-                channelInfos.forEach(ch => {
-                    if (ch.id && ch.photo) {
-                        memberIconCache[ch.id] = ch.photo;
-                    }
-                });
-            }
-        }
-
-        console.log('✅ Member icon cache updated:', Object.keys(memberIconCache).length, 'channels');
-
-        // localStorage에 저장 (영구 캐시)
-        saveIconCache(memberIconCache);
-    } catch (error) {
-        console.error('❌ Failed to fetch member icons:', error);
-    }
-}
-
-// === 검색 필터 (콜라보 + 날짜) ===
-let datePickerInstance = null; // Flatpickr 인스턴스
-let selectedDates = []; // 선택된 날짜 배열
+let datePickerInstance = null;
+let selectedDates = [];
 
 function setupCollabFilter() {
     const filterBtn = document.getElementById('filter-btn');
@@ -537,24 +649,22 @@ function setupCollabFilter() {
 
     if (!filterBtn || !filterPanel || !generationList) return;
 
-    // 초기 렌더링 (콜라보 멤버 리스트)
     renderGenerationList(generationList);
 
-    // 필터 버튼 클릭 → 패널 토글
     filterBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const isOpen = filterPanel.classList.contains('show');
         filterPanel.classList.toggle('show');
 
-        // 패널 열릴 때 Flatpickr 초기화 (한 번만)
         if (!isOpen) {
             filterPanel.style.display = 'block';
             setTimeout(() => filterPanel.classList.add('show'), 10);
-            initDatePicker();
+            if (getState().currentView !== 'songs') {
+                initDatePicker();
+            }
         }
     });
 
-    // 패널 외부 클릭 시 닫기
     document.addEventListener('click', (e) => {
         if (!filterPanel.contains(e.target) && e.target !== filterBtn) {
             filterPanel.classList.remove('show');
@@ -566,10 +676,8 @@ function setupCollabFilter() {
         }
     });
 
-    // 탭 전환 로직
     setupFilterTabs();
 
-    // 콜라보 필터 적용 버튼
     if (applyBtn) {
         applyBtn.addEventListener('click', () => {
             const selectedMembers = getSelectedCollabMembers();
@@ -580,7 +688,6 @@ function setupCollabFilter() {
         });
     }
 
-    // 콜라보 필터 초기화 버튼
     if (resetBtn) {
         resetBtn.addEventListener('click', () => {
             clearAllCheckboxes(generationList);
@@ -589,14 +696,11 @@ function setupCollabFilter() {
         });
     }
 
-    // 날짜 필터 버튼 이벤트
     setupDateFilterButtons();
 
-    // 언아카이브 숨기기 체크박스 설정
     setupHideUnarchivedCheckbox();
 }
 
-// 탭 전환 로직
 function setupFilterTabs() {
     const tabs = document.querySelectorAll('.filter-tab');
     const tabContents = document.querySelectorAll('.filter-tab-content');
@@ -605,11 +709,9 @@ function setupFilterTabs() {
         tab.addEventListener('click', () => {
             const targetTab = tab.dataset.tab;
 
-            // 탭 활성화 상태 업데이트
             tabs.forEach(t => t.classList.remove('active'));
             tab.classList.add('active');
 
-            // 탭 콘텐츠 표시/숨김
             tabContents.forEach(content => {
                 if (content.id === `${targetTab}-filter-tab`) {
                     content.classList.add('active');
@@ -618,7 +720,6 @@ function setupFilterTabs() {
                 }
             });
 
-            // 날짜 탭으로 전환 시 Flatpickr 및 빠른 선택 UI 초기화
             if (targetTab === 'date') {
                 initDatePicker();
                 initQuickDateSelector();
@@ -627,18 +728,16 @@ function setupFilterTabs() {
     });
 }
 
-// Flatpickr 달력 초기화
+// Flatpickr ?щ젰 珥덇린??
 function initDatePicker() {
     const container = document.getElementById('date-picker-container');
     if (!container || datePickerInstance) return;
 
-    // Flatpickr 글로벌 객체 확인
     if (typeof flatpickr === 'undefined') {
-        console.error('Flatpickr가 로드되지 않았습니다');
+        console.error('Flatpickr is not loaded');
         return;
     }
 
-    // Flatpickr 인라인 모드로 초기화
     datePickerInstance = flatpickr(container, {
         inline: true,
         mode: 'multiple',
@@ -646,12 +745,9 @@ function initDatePicker() {
         locale: 'ko',
         defaultDate: selectedDates,
         onChange: (dates) => {
-            // 선택된 날짜 저장
             selectedDates = dates.map(d => formatDate(d));
             updateSelectedDatesDisplay();
 
-            // 달력에서 직접 날짜 변경 시 년/월 빠른 선택 버튼 해제
-            // (프로그래밍 방식이 아닌 사용자 클릭인 경우에만)
             if (!isQuickSelectUpdating) {
                 clearQuickDateSelection();
             }
@@ -659,7 +755,6 @@ function initDatePicker() {
     });
 }
 
-// 날짜 포맷팅 (YYYY-MM-DD)
 function formatDate(date) {
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -667,7 +762,6 @@ function formatDate(date) {
     return `${year}-${month}-${day}`;
 }
 
-// 선택된 날짜 표시 업데이트
 function updateSelectedDatesDisplay() {
     const container = document.getElementById('selected-dates-list');
     if (!container) return;
@@ -677,50 +771,40 @@ function updateSelectedDatesDisplay() {
         return;
     }
 
-    // 날짜 태그 생성
     container.innerHTML = selectedDates
         .sort()
         .map(date => {
-            // YYYY-MM-DD → M/D 형식으로 표시
             const [year, month, day] = date.split('-');
             const displayDate = `${parseInt(month)}/${parseInt(day)}`;
-            return `<span class="date-tag" data-date="${date}">${displayDate}<span class="remove-date" title="제거">✕</span></span>`;
+        return `<span class="date-tag" data-date="${date}">${displayDate}<span class="remove-date" title="제거">&times;</span></span>`;
         })
         .join('');
 
-    // 제거 버튼 이벤트
     container.querySelectorAll('.remove-date').forEach(btn => {
         btn.addEventListener('click', (e) => {
-            // 이벤트 버블링 방지 - 외부 클릭으로 오판되어 패널 닫히는 것 방지
             e.stopPropagation();
 
             const tag = e.target.closest('.date-tag');
             const dateToRemove = tag.dataset.date;
 
-            // 배열에서 제거
             selectedDates = selectedDates.filter(d => d !== dateToRemove);
 
-            // Flatpickr 업데이트
             if (datePickerInstance) {
                 datePickerInstance.setDate(selectedDates, false);
             }
 
-            // 표시 업데이트
             updateSelectedDatesDisplay();
         });
     });
 }
 
-// 날짜 필터 버튼 이벤트
 function setupDateFilterButtons() {
     const applyBtn = document.getElementById('apply-date-btn');
     const clearBtn = document.getElementById('clear-date-btn');
 
     if (applyBtn) {
         applyBtn.addEventListener('click', () => {
-            // 년/월 빠른 선택 필터 적용
             applyQuickDateFilter();
-            // 개별 날짜 필터 적용
             applyDateFilter(selectedDates);
             const filterPanel = document.getElementById('search-filter-panel');
             if (filterPanel) filterPanel.classList.remove('show');
@@ -729,48 +813,37 @@ function setupDateFilterButtons() {
 
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
-            // 날짜 초기화
             selectedDates = [];
             if (datePickerInstance) {
                 datePickerInstance.clear();
             }
             updateSelectedDatesDisplay();
 
-            // 년/월 선택 상태 초기화
             clearQuickDateSelection();
-            // 상태도 함께 초기화
             setState({
                 filterYears: null,
                 filterMonths: null
             });
 
-            // 필터 적용 (전체 표시)
             applyDateFilter([]);
         });
     }
 }
 
 // ========================================
-// 년/월 빠른 선택 기능 (다중 선택 지원)
 // ========================================
 
-// 현재 표시 중인 년도 범위의 시작 년도
 let quickSelectBaseYear = new Date().getFullYear() - 1;
-// 선택된 년도들 (다중 선택 - 배열)
 let selectedQuickYears = [];
-// 선택된 월들 (다중 선택 - 배열)
 let selectedQuickMonths = [];
-// 프로그래밍 방식으로 달력 업데이트 중인지 플래그
 let isQuickSelectUpdating = false;
 
-// 년/월 빠른 선택 UI 초기화
 function initQuickDateSelector() {
-    renderYearButtons();  // 내부에서 setupYearButtons 호출함
+    renderYearButtons();
     setupYearNavigation();
     setupMonthButtons();
 }
 
-// 년도 버튼 렌더링 (3개 표시)
 function renderYearButtons() {
     const container = document.getElementById('year-buttons');
     if (!container) return;
@@ -782,40 +855,32 @@ function renderYearButtons() {
         btn.className = 'year-btn';
         btn.dataset.year = year;
         btn.textContent = year;
-        // 다중 선택: 배열에 포함되어 있으면 selected
         if (selectedQuickYears.includes(year)) {
             btn.classList.add('selected');
         }
 
-        // 각 버튼에 직접 이벤트 등록 (createElement로 만들어서 중복 없음)
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const clickedYear = parseInt(btn.dataset.year);
 
-            // 토글 로직
             const index = selectedQuickYears.indexOf(clickedYear);
             if (index > -1) {
-                // 선택 해제
                 selectedQuickYears = selectedQuickYears.filter(y => y !== clickedYear);
                 btn.classList.remove('selected');
 
-                // 년도가 모두 해제되면 월 선택도 초기화
                 if (selectedQuickYears.length === 0) {
                     selectedQuickMonths = [];
                     clearMonthSelection();
                 }
             } else {
-                // 선택 추가
                 selectedQuickYears = [...selectedQuickYears, clickedYear];
                 btn.classList.add('selected');
 
-                // 달력을 해당 년도의 1월로 이동
                 if (datePickerInstance) {
                     datePickerInstance.jumpToDate(new Date(clickedYear, 0, 1));
                 }
             }
 
-            // 달력에 선택된 년/월의 모든 날짜 반영
             syncCalendarWithQuickSelect();
         });
 
@@ -823,7 +888,6 @@ function renderYearButtons() {
     }
 }
 
-// 년도 네비게이션 (◀ ▶) 설정
 function setupYearNavigation() {
     const prevBtn = document.getElementById('prev-year-btn');
     const nextBtn = document.getElementById('next-year-btn');
@@ -845,7 +909,6 @@ function setupYearNavigation() {
     }
 }
 
-// 년도 버튼 이벤트 설정 (다중 선택 토글)
 function setupYearButtons() {
     const container = document.getElementById('year-buttons');
     if (!container) return;
@@ -855,23 +918,18 @@ function setupYearButtons() {
             e.stopPropagation();
             const year = parseInt(btn.dataset.year);
 
-            // 토글 로직: 이미 선택되어 있으면 제거, 없으면 추가
             const index = selectedQuickYears.indexOf(year);
             if (index > -1) {
-                // 선택 해제
                 selectedQuickYears = selectedQuickYears.filter(y => y !== year);
                 btn.classList.remove('selected');
             } else {
-                // 선택 추가
                 selectedQuickYears = [...selectedQuickYears, year];
                 btn.classList.add('selected');
             }
-            // 즉시 API 호출하지 않음 - 적용 버튼 클릭 시 적용
         });
     });
 }
 
-// 월 버튼 이벤트 설정 (다중 선택 토글)
 function setupMonthButtons() {
     const container = document.getElementById('month-selector');
     if (!container) return;
@@ -880,9 +938,7 @@ function setupMonthButtons() {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
 
-            // 년도가 선택되지 않았으면 월 선택 불가
             if (selectedQuickYears.length === 0) {
-                // 간단한 시각적 피드백 (버튼 흔들림)
                 btn.classList.add('shake');
                 setTimeout(() => btn.classList.remove('shake'), 300);
                 return;
@@ -890,32 +946,25 @@ function setupMonthButtons() {
 
             const month = parseInt(btn.dataset.month);
 
-            // 토글 로직: 이미 선택되어 있으면 제거, 없으면 추가
             const index = selectedQuickMonths.indexOf(month);
             if (index > -1) {
-                // 선택 해제
                 selectedQuickMonths = selectedQuickMonths.filter(m => m !== month);
                 btn.classList.remove('selected');
             } else {
-                // 선택 추가
                 selectedQuickMonths = [...selectedQuickMonths, month];
                 btn.classList.add('selected');
 
-                // 달력을 해당 년/월로 이동 (선택된 첫 번째 년도 기준)
                 if (datePickerInstance && selectedQuickYears.length > 0) {
                     const firstYear = Math.min(...selectedQuickYears);
                     datePickerInstance.jumpToDate(new Date(firstYear, month - 1, 1));
                 }
             }
 
-            // 달력에 선택된 년/월의 모든 날짜 반영
             syncCalendarWithQuickSelect();
-            // 즉시 API 호출하지 않음 - 적용 버튼 클릭 시 적용
         });
     });
 }
 
-// 년도 버튼 UI 업데이트
 function updateYearButtonsUI() {
     const container = document.getElementById('year-buttons');
     if (!container) return;
@@ -930,14 +979,12 @@ function updateYearButtonsUI() {
     });
 }
 
-// 월 선택 UI 초기화
 function clearMonthSelection() {
     const container = document.getElementById('month-selector');
     if (!container) return;
     container.querySelectorAll('.month-btn').forEach(b => b.classList.remove('selected'));
 }
 
-// 빠른 선택 상태 전체 초기화
 function clearQuickDateSelection() {
     selectedQuickYears = [];
     selectedQuickMonths = [];
@@ -948,11 +995,9 @@ function clearQuickDateSelection() {
     clearMonthSelection();
 }
 
-// 년/월 빠른 선택에 따라 달력에 날짜 자동 선택
 function syncCalendarWithQuickSelect() {
     if (!datePickerInstance) return;
     if (selectedQuickYears.length === 0) {
-        // 년도 없으면 달력 초기화
         isQuickSelectUpdating = true;
         datePickerInstance.clear();
         selectedDates = [];
@@ -961,14 +1006,12 @@ function syncCalendarWithQuickSelect() {
         return;
     }
 
-    // 선택된 년/월 조합의 모든 날짜 생성
     const allDates = [];
     const years = selectedQuickYears;
     const months = selectedQuickMonths.length > 0 ? selectedQuickMonths : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 
     years.forEach(year => {
         months.forEach(month => {
-            // 해당 월의 마지막 날짜 계산
             const lastDay = new Date(year, month, 0).getDate();
             for (let day = 1; day <= lastDay; day++) {
                 allDates.push(new Date(year, month - 1, day));
@@ -976,7 +1019,6 @@ function syncCalendarWithQuickSelect() {
         });
     });
 
-    // 달력에 날짜 설정 (onChange 트리거 방지)
     isQuickSelectUpdating = true;
     datePickerInstance.setDate(allDates, false);
     selectedDates = allDates.map(d => formatDate(d));
@@ -984,58 +1026,47 @@ function syncCalendarWithQuickSelect() {
     isQuickSelectUpdating = false;
 }
 
-// 빠른 날짜 필터 적용 (적용 버튼에서 호출)
 function applyQuickDateFilter() {
-    // 검색 상태 업데이트 - 배열로 저장
     setState({
         filterYears: selectedQuickYears.length > 0 ? [...selectedQuickYears] : null,
         filterMonths: selectedQuickMonths.length > 0 ? [...selectedQuickMonths] : null
     });
 
-    // 아카이브 새로고침
     const state = getState();
     if (state.currentView === 'archive' || state.currentView === 'home') {
         loadArchives(state.currentChannelId, 1);
     }
 }
 
-// 날짜 필터 적용
 function applyDateFilter(dates) {
-    // 상태 업데이트 (1페이지로 이동)
     setState({
         filterDates: dates,
         archivePage: 1
     });
 
-    // 아카이브 새로고침
     const state = getState();
     if (state.currentView === 'archive' || state.currentView === 'home') {
         loadArchives(state.currentChannelId, 1);
     }
 }
 
-// 언아카이브 숨기기 체크박스 설정
 function setupHideUnarchivedCheckbox() {
     const checkbox = document.getElementById('hide-unarchived-checkbox');
     const label = checkbox?.closest('.unarchived-toggle');
     if (!checkbox || !label) return;
 
-    // 초기 상태는 체크 해제 (localStorage 사용 안 함 - 새로고침/채널변경 시 리셋)
 
     checkbox.addEventListener('change', () => {
         const newValue = checkbox.checked;
 
-        // 상태 업데이트 (1페이지로 이동)
         setState({ hideUnarchived: newValue, archivePage: 1 });
 
-        // UI 업데이트
         if (newValue) {
             label.classList.add('active');
         } else {
             label.classList.remove('active');
         }
 
-        // 아카이브 새로고침 (1페이지)
         const currentState = getState();
         if (currentState.currentView === 'archive' || currentState.currentView === 'home') {
             loadArchives(currentState.currentChannelId, 1);
@@ -1043,41 +1074,40 @@ function setupHideUnarchivedCheckbox() {
     });
 }
 
-// === 멤버 photo URL 하드코딩 (Holodex API에서 추출) ===
 const MEMBER_PHOTOS = {
-    // 0기생
+    // 0湲곗깮
     'UCp6993wxpyDPHUpavwDFqgg': 'https://yt3.ggpht.com/ytc/AIdro_kT9PiLS8BWANuBdGG_-GHsNZxFqmF0YjMnzK55jISdca4=s800-c-k-c0x00ffffff-no-rj', // Tokino Sora
     'UCDqI2jOz0weumE8s7paEk6g': 'https://yt3.ggpht.com/H8pRHxQm4-FjRl9XUFn9UQbJhVcj5PIvwDW6o7ZlBTRj2bgVP5xonQEl36H-O6NHaWmbP1zaxg=s800-c-k-c0x00ffffff-no-rj', // Roboco
     'UC-hM6YJuNYVAmUWxeIr9FeA': 'https://yt3.ggpht.com/b8EKl_i-e2dinoparyhUJEaRhInlSWwm-dZX0oIq-x1mUvQga530G_PIdutlSNkGKEAyX9aaBQ=s800-c-k-c0x00ffffff-no-rj', // Sakura Miko
     'UC5CwaMl1eIgY8h02uZw7u8A': 'https://yt3.ggpht.com/ytc/AIdro_kLDBK5ksSvk5-XJ6S8e0kWfjy7mVl3jyUkgDeMQ7rlCpU=s800-c-k-c0x00ffffff-no-rj', // Suisei
     'UC0TXe_LYZ4scaW2XMyi5_kw': 'https://yt3.ggpht.com/tRZGMhn8vSvYE0_15SjaE_3dTH5JTZzjdnb5gs1StecT1tKn1gQ2tVkRfi_n42Q5fYz13ewdayo=s800-c-k-c0x00ffffff-no-rj', // AZKi
-    // 1기생
+    // 1湲곗깮
     'UCdn5BQ06XqgXoAxIhbqw5Rg': 'https://yt3.ggpht.com/ytc/AIdro_mGXEeXXCCPh-sl2jKYbYpLBuCsjEGDgJaL5RQziYhyugQ=s800-c-k-c0x00ffffff-no-rj', // Fubuki
     'UCQ0UDLQCjY0rmuxCDE38FGg': 'https://yt3.ggpht.com/LZBvU0s_S-xi7fHmeab_iA8ztfGimxzisUBMODGKaIEx3r3R-tIDReiX3SlmbH2showigElJ=s800-c-k-c0x00ffffff-no-rj', // Matsuri
     'UCFTLzh12_nrtzqBPsTCqenA': 'https://yt3.ggpht.com/0Nx9jWdjiUrkizCVCDZg_MasdF6b85DAsQATmAkNC2A8b3Y89vXlnSDZ_v1fM_X4w3088sJnmA=s800-c-k-c0x00ffffff-no-rj', // Aki
     'UC1CfXB_kRs3C-zaeTG3oGyg': 'https://yt3.ggpht.com/jxI6FmNKDpYKXB0puyLhB5gq4JgWFvRT9Rr2C_d3hFT1q0SSOHh3QIUfvSxfTHupTXFnleqI=s800-c-k-c0x00ffffff-no-rj', // Haato
-    // 2기생
+    // 2湲곗깮
     'UC1opHUrw8rvnsadT-iGp7Cg': 'https://yt3.ggpht.com/ytc/AIdro_kaZLtKaya9TSJr3M4lpzV95R2rWdQtGk67fwedroUfSnE=s800-c-k-c0x00ffffff-no-rj', // Aqua
     'UCXTpFs_3PqI41qX2d9tL2Rw': 'https://yt3.ggpht.com/K91NQLuy_JMQ65n-Opf0Q2FZBO3yOURnMRusO7o5DTjaJ1QVtP-ANN4lehK57X4KXpcI2MiRig=s800-c-k-c0x00ffffff-no-rj', // Shion
     'UC7fk0CB07ly8oSl0aqKkqFg': 'https://yt3.ggpht.com/3CeLWGYb6cLUywTJzNt-UpITviNxeGNvtjhIqbV-AIybCqCoFw9onWtg91bjwpqvfEP9mfqIR4Q=s800-c-k-c0x00ffffff-no-rj', // Ayame
     'UC1suqwovbL1kzsoaZgFZLKg': 'https://yt3.ggpht.com/gv-5tmPSiFipkP01atgnCS6WwdxzUxfermmqGw_UhuDNtRFmbdb2NALcL6rR0LxaM5JX9JhE9g=s800-c-k-c0x00ffffff-no-rj', // Choco
     'UCvzGlP9oQwU--Y0r9id_jnA': 'https://yt3.ggpht.com/ytc/AIdro_k5mjdt1wcbaYCXKwmDpVXmSGtOc-LH3WjIyUHVC4soP28=s800-c-k-c0x00ffffff-no-rj', // Subaru
-    // 게이머즈
+    // 寃뚯씠癒몄쫰
     'UCp-5t9SrOQwXMU7iIjQfARg': 'https://yt3.ggpht.com/JV8VdQFA7eZk5H1cRxHyIdLKQ5wD6EBywjxLzrne2EpY9LSiVgtapvh0iQA6plVNxdIKNxK0NRU=s800-c-k-c0x00ffffff-no-rj', // Mio
     'UCvaTdHTWBGv3MKj3KVqJVCw': 'https://yt3.ggpht.com/oD8ISaA35737mg-lt5mYSfOIXmjCeHYcSFFpTQn4AVMkqiyzrMle_THvX6NdfSxbjUO6fQ6_wg=s800-c-k-c0x00ffffff-no-rj', // Okayu
     'UChAnqc_AY5_I3Px5dig3X1Q': 'https://yt3.ggpht.com/ytc/AIdro_nrS6tFctvjyWv1mKzKBIetHJBfpqwHOpvRFc3KU2P_5yc=s800-c-k-c0x00ffffff-no-rj', // Korone
-    // 3기생
+    // 3湲곗깮
     'UC1DCedRgGHBdm81E1llLhOQ': 'https://yt3.ggpht.com/B-5Iau5CJVDiUOeCvCzHiwdkUijqoi2n0tNwfgIv_yDAvMbLHS4vq1IvK2RxL8y69BxTwmPhow=s800-c-k-c0x00ffffff-no-rj', // Pekora
     'UCvInZx9h3jC2JzsIzoOebWg': 'https://yt3.ggpht.com/XGJE8dQHKGyKma2oLZM-oZxF2c5OnQsjQx68tTowiPfh7gI2cHhP8REzXC7exvw2ri5QxFxEA-4=s800-c-k-c0x00ffffff-no-rj', // Flare
     'UCdyqAaZDKHXg4Ahi7VENThQ': 'https://yt3.ggpht.com/ytc/AIdro_kIKJPVEqJLs9FNMgdti5WWHtc1t0MwihOlW-ZK90nGUdk=s800-c-k-c0x00ffffff-no-rj', // Noel
     'UCCzUftO8KOVkV4wQG1vkUvg': 'https://yt3.ggpht.com/RnFYoR_VkEZZ4OGRJz2cPXem1iRqMNzcGVp5LIxTRqhDu4vqckc83DBrVi2uwxiCPWEmmH6vSJk=s800-c-k-c0x00ffffff-no-rj', // Marine
-    // 4기생
+    // 4湲곗깮
     'UCZlDXzGoo7d44bwdNObFacg': 'https://yt3.ggpht.com/KjtzUgvj7v4socyPBkwZVlRJC9YU7Seka_a2lYf-LuBgc_YXXknzaR--5rbtYR46Q-JAWcR-=s800-c-k-c0x00ffffff-no-rj', // Kanata
     'UCqm3BQLlJfvkTsX_hvm0UmA': 'https://yt3.ggpht.com/XJYar8ZAQ59ce0nFlf-Dl6V16Dwznu5xfh3XnMW_JE-nCVLHLiRTS-x1gB_eR4_CJY3KDfKxsVo=s800-c-k-c0x00ffffff-no-rj', // Watame
     'UC1uv2Oq6kNxgATlCiez59hw': 'https://yt3.ggpht.com/kF39-I4IfZJOWuGiciawwB-v4M_X9u6_-jxCvAiYSHSRuUS-LdpeWWRHO7c4Pk8sXROBaPl9iMQ=s800-c-k-c0x00ffffff-no-rj', // Towa
     'UCa9Y57gfeY0Zro_noHRVrnw': 'https://yt3.ggpht.com/05zupy7ai3DW0mEmY3tSgkb4CGjHadAXG0bs_PSzg09l0_5MInPrG4Bh-ZRlAWcPncOe9cnQkQ=s800-c-k-c0x00ffffff-no-rj', // Luna
     'UCS9uQI-jC3DE0L4IpXyvr6w': 'https://yt3.ggpht.com/ytc/AMLnZu8xM8iFAtHMoKUPqKh-0NT7QL6zU06fEgwkIB0D0A=s800-c-k-c0x00ffffff-no-rj', // Coco
-    // 5기생
+    // 5湲곗깮
     'UCFKOVgVbGmX65RxO3EtH3iw': 'https://yt3.ggpht.com/ytc/AIdro_nHPsjV8KMncrIzZh7NPGaG8xzAgzN8Vf9YAj12dRN7sCc=s800-c-k-c0x00ffffff-no-rj', // Lamy
     'UCAWSyEs_Io8MtpY3m-zqILA': 'https://yt3.ggpht.com/yQDRxiMIkbHsn7e4s6BCIBCNb3WmiV1myrpo6Lq2-dfCmAn1N47y12mhZg0NOfQMWQMYW4Qm=s800-c-k-c0x00ffffff-no-rj', // Nene
     'UCUKD-uaobj9jiqB-VXt71mA': 'https://yt3.ggpht.com/WSOgf5zOOFKQN8pQB8VL8R6OSO0j81oGQSSzN22m8mts4VWZSPHDou7II8Lk4JA3OlQL-Iuu=s800-c-k-c0x00ffffff-no-rj', // Botan
@@ -1134,21 +1164,19 @@ const MEMBER_PHOTOS = {
     'UCTvHWSfBZgtxE4sILOaurIQ': 'https://yt3.ggpht.com/0pxwGbJZbeMVkF9wGW4FNE2vJERPo0zUkzSEFWj6IHio-uiLWMSJKdjhkqwRkWwDHNu0dXiynw=s800-c-k-c0x00ffffff-no-rj', // Zeta
     'UCZLZ8Jjx_RN2CXloOmgTHVg': 'https://yt3.ggpht.com/2jGAglj5aTcUWO7WRNfq54KV3ipKblUzxI6fAKSjAfMw6J9Qqb6NbzbJA2i0t4cKgUR7SPdWC_w=s800-c-k-c0x00ffffff-no-rj', // Kaela
     'UCjLEmnpCNeisMxy134KPwWw': 'https://yt3.ggpht.com/XRCP2PC-lvvielp04Eq8KyBzgd3_bFc_DNfptN5s-ftd1v6SadGuMChY6Jm3elaqaK7xwE1B=s800-c-k-c0x00ffffff-no-rj', // Kobo
-    // 개인세
+    // 媛쒖씤??
     'UCrV1Hf5r8P148idjoSfrGEQ': 'https://yt3.ggpht.com/CAO0J4GC4_G8VxiyulWcZZ3b44l27EFl-vSOER7ucwAL5IJIRxVk4XSQdhWn3PLXD-rQ-QVj=s800-c-k-c0x00ffffff-no-rj', // Sakuna
     'UCLIpj4TmXviSTNE_U5WG_Ug': 'https://yt3.ggpht.com/YF6d4zXLWFR6VjPpF01N8w0Wq-MfwMz6MZTDQbOF2TeSSMT4bwtIf2xGs8DfoufreyVcro4N7Bo=s800-c-k-c0x00ffffff-no-rj', // Roa
     'UCt30jJgChL8qeT9VPadidSw': 'https://yt3.ggpht.com/ytc/AIdro_m6xQ9ez0I8lnwswHqAns9ZRPsaCCutfzu6eUbM7pwzqsA=s800-c-k-c0x00ffffff-no-rj', // Shigure Ui
     'UClS3cnIUM9yzsBPQzeyX_8Q': 'https://yt3.ggpht.com/E_GIFETWLQYVBMYBzSfwr6VqmJRALcKYvruQcC5jyI9KqRszN9YaPWlT-C3PobxtTUplYNvrCg=s800-c-k-c0x00ffffff-no-rj', // Amagai Ruka
-    // 계약해지
     'UCl_gCybOJRIgOXw6Qb4qJzQ': 'https://yt3.ggpht.com/ytc/AMLnZu9cOjR_bgBuDzX45gUUMHCDo1HLLiecGY-Y1yPCDg=s800-c-k-c0x00ffffff-no-rj', // Rushia
-    'UCD8HOxPs4Xvsm8H0ZxXGiBw': '/image/mel.jpg', // Mel (로컬 이미지 - YouTube URL 만료)
+    'UCD8HOxPs4Xvsm8H0ZxXGiBw': '/image/mel.jpg',
 };
 
-// 모든 멤버의 채널 ID 수집
 function getAllMemberChannelIds() {
     const generations = [
         {
-            id: 'gen0', name: '0기생', members: [
+            id: 'gen0', name: '0湲곗깮', members: [
                 { name: 'Tokino Sora', id: 'UCp6993wxpyDPHUpavwDFqgg' },
                 { name: 'Roboco', id: 'UCDqI2jOz0weumE8s7paEk6g' },
                 { name: 'Sakura Miko', id: 'UC-hM6YJuNYVAmUWxeIr9FeA' },
@@ -1157,7 +1185,7 @@ function getAllMemberChannelIds() {
             ]
         },
         {
-            id: 'gen1', name: '1기생', members: [
+            id: 'gen1', name: '1湲곗깮', members: [
                 { name: 'Shirakami Fubuki', id: 'UCdn5BQ06XqgXoAxIhbqw5Rg' },
                 { name: 'Natsuiro Matsuri', id: 'UCQ0UDLQCjY0rmuxCDE38FGg' },
                 { name: 'Aki Rosenthal', id: 'UCFTLzh12_nrtzqBPsTCqenA' },
@@ -1165,7 +1193,7 @@ function getAllMemberChannelIds() {
             ]
         },
         {
-            id: 'gen2', name: '2기생', members: [
+            id: 'gen2', name: '2湲곗깮', members: [
                 { name: 'Minato Aqua', id: 'UC1opHUrw8rvnsadT-iGp7Cg' },
                 { name: 'Murasaki Shion', id: 'UCXTpFs_3PqI41qX2d9tL2Rw' },
                 { name: 'Nakiri Ayame', id: 'UC7fk0CB07ly8oSl0aqKkqFg' },
@@ -1174,14 +1202,14 @@ function getAllMemberChannelIds() {
             ]
         },
         {
-            id: 'gamers', name: '게이머즈', members: [
+            id: 'gamers', name: '寃뚯씠癒몄쫰', members: [
                 { name: 'Ookami Mio', id: 'UCp-5t9SrOQwXMU7iIjQfARg' },
                 { name: 'Nekomata Okayu', id: 'UCvaTdHTWBGv3MKj3KVqJVCw' },
                 { name: 'Inugami Korone', id: 'UChAnqc_AY5_I3Px5dig3X1Q' }
             ]
         },
         {
-            id: 'gen3', name: '3기생', members: [
+            id: 'gen3', name: '3湲곗깮', members: [
                 { name: 'Usada Pekora', id: 'UC1DCedRgGHBdm81E1llLhOQ' },
                 { name: 'Shiranui Flare', id: 'UCvInZx9h3jC2JzsIzoOebWg' },
                 { name: 'Shirogane Noel', id: 'UCdyqAaZDKHXg4Ahi7VENThQ' },
@@ -1189,7 +1217,7 @@ function getAllMemberChannelIds() {
             ]
         },
         {
-            id: 'gen4', name: '4기생', members: [
+            id: 'gen4', name: '4湲곗깮', members: [
                 { name: 'Amane Kanata', id: 'UCZlDXzGoo7d44bwdNObFacg' },
                 { name: 'Tsunomaki Watame', id: 'UCqm3BQLlJfvkTsX_hvm0UmA' },
                 { name: 'Tokoyami Towa', id: 'UC1uv2Oq6kNxgATlCiez59hw' },
@@ -1197,7 +1225,7 @@ function getAllMemberChannelIds() {
             ]
         },
         {
-            id: 'gen5', name: '5기생', members: [
+            id: 'gen5', name: '5湲곗깮', members: [
                 { name: 'Yukihana Lamy', id: 'UCFKOVgVbGmX65RxO3EtH3iw' },
                 { name: 'Momosuzu Nene', id: 'UCAWSyEs_Io8MtpY3m-zqILA' },
                 { name: 'Shishiro Botan', id: 'UCUKD-uaobj9jiqB-VXt71mA' },
@@ -1299,12 +1327,10 @@ function getAllMemberChannelIds() {
     return allIds;
 }
 
-// 기수별 체크박스 리스트 렌더링 (아이콘 포함)
 function renderGenerationList(container) {
-    // 기수 데이터 - 채널 ID 포함
     const generations = [
         {
-            id: 'gen0', name: '0기생', members: [
+            id: 'gen0', name: '0湲곗깮', members: [
                 { name: 'Tokino Sora', id: 'UCp6993wxpyDPHUpavwDFqgg' },
                 { name: 'Roboco', id: 'UCDqI2jOz0weumE8s7paEk6g' },
                 { name: 'Sakura Miko', id: 'UC-hM6YJuNYVAmUWxeIr9FeA' },
@@ -1313,7 +1339,7 @@ function renderGenerationList(container) {
             ]
         },
         {
-            id: 'gen1', name: '1기생', members: [
+            id: 'gen1', name: '1湲곗깮', members: [
                 { name: 'Shirakami Fubuki', id: 'UCdn5BQ06XqgXoAxIhbqw5Rg' },
                 { name: 'Natsuiro Matsuri', id: 'UCQ0UDLQCjY0rmuxCDE38FGg' },
                 { name: 'Aki Rosenthal', id: 'UCFTLzh12_nrtzqBPsTCqenA' },
@@ -1321,7 +1347,7 @@ function renderGenerationList(container) {
             ]
         },
         {
-            id: 'gen2', name: '2기생', members: [
+            id: 'gen2', name: '2湲곗깮', members: [
                 { name: 'Minato Aqua', id: 'UC1opHUrw8rvnsadT-iGp7Cg' },
                 { name: 'Murasaki Shion', id: 'UCXTpFs_3PqI41qX2d9tL2Rw' },
                 { name: 'Nakiri Ayame', id: 'UC7fk0CB07ly8oSl0aqKkqFg' },
@@ -1330,14 +1356,14 @@ function renderGenerationList(container) {
             ]
         },
         {
-            id: 'gamers', name: '게이머즈', members: [
+            id: 'gamers', name: '寃뚯씠癒몄쫰', members: [
                 { name: 'Ookami Mio', id: 'UCp-5t9SrOQwXMU7iIjQfARg' },
                 { name: 'Nekomata Okayu', id: 'UCvaTdHTWBGv3MKj3KVqJVCw' },
                 { name: 'Inugami Korone', id: 'UChAnqc_AY5_I3Px5dig3X1Q' }
             ]
         },
         {
-            id: 'gen3', name: '3기생', members: [
+            id: 'gen3', name: '3湲곗깮', members: [
                 { name: 'Usada Pekora', id: 'UC1DCedRgGHBdm81E1llLhOQ' },
                 { name: 'Shiranui Flare', id: 'UCvInZx9h3jC2JzsIzoOebWg' },
                 { name: 'Shirogane Noel', id: 'UCdyqAaZDKHXg4Ahi7VENThQ' },
@@ -1345,7 +1371,7 @@ function renderGenerationList(container) {
             ]
         },
         {
-            id: 'gen4', name: '4기생', members: [
+            id: 'gen4', name: '4湲곗깮', members: [
                 { name: 'Amane Kanata', id: 'UCZlDXzGoo7d44bwdNObFacg' },
                 { name: 'Tsunomaki Watame', id: 'UCqm3BQLlJfvkTsX_hvm0UmA' },
                 { name: 'Tokoyami Towa', id: 'UC1uv2Oq6kNxgATlCiez59hw' },
@@ -1354,7 +1380,7 @@ function renderGenerationList(container) {
             ]
         },
         {
-            id: 'gen5', name: '5기생', members: [
+            id: 'gen5', name: '5湲곗깮', members: [
                 { name: 'Yukihana Lamy', id: 'UCFKOVgVbGmX65RxO3EtH3iw' },
                 { name: 'Momosuzu Nene', id: 'UCAWSyEs_Io8MtpY3m-zqILA' },
                 { name: 'Shishiro Botan', id: 'UCUKD-uaobj9jiqB-VXt71mA' },
@@ -1445,7 +1471,6 @@ function renderGenerationList(container) {
                 { name: 'Kobo Kanaeru', id: 'UCjLEmnpCNeisMxy134KPwWw' }
             ]
         },
-        // === 계약해지 ===
         {
             id: 'terminated', name: '계약해지', members: [
                 { name: 'Uruha Rushia', id: 'UCl_gCybOJRIgOXw6Qb4qJzQ' },
@@ -1454,55 +1479,109 @@ function renderGenerationList(container) {
         }
     ];
 
-    // 영어 → 한글 변환
-    const toKorean = window.toKoreanName || ((name) => name);
-
-    // 채널 아이콘 URL 생성 (MEMBER_PHOTOS 하드코딩 → 로컬 CHANNELS → placeholder)
-    const getIconUrl = (channelId) => {
-        // 1순위: MEMBER_PHOTOS 하드코딩에서 가져오기 (가장 확실)
-        if (MEMBER_PHOTOS[channelId]) {
-            return MEMBER_PHOTOS[channelId];
-        }
-        // 2순위: 로컬 CHANNELS에서 찾기
+    const getIconUrls = (channelId) => {
         const localChannel = getChannelById(channelId);
-        if (localChannel && localChannel.icon) {
-            return localChannel.icon;
-        }
-        // 3순위: placeholder 반환 (절대 네트워크 요청 안 함)
-        return null;
+        const channel = localChannel || { id: channelId };
+        const primary = getMemberPhotoUrl(channel);
+        const proxyFallback = getChannelImageProxyUrl(channelId);
+        const cachedIcon = memberIconCache[channelId];
+        if (cachedIcon) return { primary, fallback: cachedIcon };
+
+        return { primary, fallback: getRemoteMemberPhotoUrl(channel) || proxyFallback };
+    };
+
+    const knownIds = new Set(
+        generations.flatMap(gen => gen.members.map(member => member.id).filter(Boolean))
+    );
+
+    const renderMember = member => {
+        const channelId = member.id || member.channel_id || '';
+        if (!channelId) return '';
+
+        const canonicalName = member.name || member.englishName || member.originalName || channelId;
+        const displayName = getLocalizedTalentName(member);
+        const iconUrls = getIconUrls(channelId);
+        const fallback = iconUrls.fallback || member.photo || member.icon;
+
+        return `
+                        <div class="member-item" data-member="${escapeHtml(canonicalName)}" data-value="${escapeHtml(channelId)}">
+                            <input type="checkbox" value="${escapeHtml(channelId)}" data-member="${escapeHtml(canonicalName)}" style="display:none;">
+                            <img class="member-icon" src="${escapeHtml(iconUrls.primary)}" data-fallback="${escapeHtml(fallback)}" alt="${escapeHtml(displayName)}" loading="lazy" decoding="async">
+                            <span class="member-name">${escapeHtml(displayName)}</span>
+                        </div>
+                    `;
     };
 
     container.innerHTML = generations.map(gen => `
         <div class="generation-section" data-gen-id="${gen.id}">
             <div class="generation-header" onclick="toggleGeneration('${gen.id}')">
-                <span class="toggle-icon">▼</span>
-                <span>${gen.name}</span>
+                <span class="toggle-icon">▾</span>
+                <span>${escapeHtml(getLocalizedGenerationName(gen.id, gen.name))}</span>
             </div>
             <div class="members-grid" id="members-${gen.id}">
-                ${gen.members.map(member => `
-                    <div class="member-item" data-member="${member.name}" data-value="${member.name}">
-                        <input type="checkbox" value="${member.name}" style="display:none;">
-                        <img class="member-icon" src="${getIconUrl(member.id) || `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='48' height='48'><rect width='48' height='48' fill='%23ff69b4'/><text x='50%' y='55%' font-size='20' text-anchor='middle' fill='white'>${member.name.charAt(0)}</text></svg>`}" alt="${member.name}" onerror="this.onerror=null; this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22><rect width=%2248%22 height=%2248%22 fill=%22%23ff69b4%22/><text x=%2250%%22 y=%2255%%22 font-size=%2220%22 text-anchor=%22middle%22 fill=%22white%22>${member.name.charAt(0)}</text></svg>'">
-                        <span class="member-name">${toKorean(member.name)}</span>
-                    </div>
-                `).join('')}
+                ${gen.members.map(renderMember).join('')}
             </div>
         </div>
     `).join('');
 
-    // 멤버 클릭 시 선택 토글
-    container.querySelectorAll('.member-item').forEach(item => {
-        item.addEventListener('click', (e) => {
+    if (!container.dataset.memberEventsBound) {
+        container.dataset.memberEventsBound = 'true';
+
+        container.addEventListener('click', (e) => {
+            const item = e.target.closest('.member-item');
+            if (!item || !container.contains(item)) return;
             e.preventDefault();
             e.stopPropagation();
             const checkbox = item.querySelector('input[type="checkbox"]');
+            if (!checkbox) return;
             checkbox.checked = !checkbox.checked;
             item.classList.toggle('checked', checkbox.checked);
         });
-    });
+
+        container.addEventListener('error', (e) => {
+            const img = e.target;
+            if (!img.classList?.contains('member-icon')) return;
+            const fallback = img.dataset.fallback || '';
+            if (fallback && img.src !== new URL(fallback, window.location.origin).href) {
+                img.dataset.fallback = '';
+                img.src = fallback;
+                return;
+            }
+            img.remove();
+        }, true);
+    }
+
+    (async () => {
+        if (typeof window.getChannelIndex !== 'function') return;
+
+        try {
+            const channels = await window.getChannelIndex();
+            const indexedMembers = channels
+                .filter(channel => channel.id && !knownIds.has(channel.id))
+                .sort((a, b) => (b.count || 0) - (a.count || 0));
+
+            if (indexedMembers.length === 0 || document.getElementById('members-db-index')) return;
+
+            const section = document.createElement('div');
+            section.className = 'generation-section';
+            section.dataset.genId = 'db-index';
+            section.innerHTML = `
+                <div class="generation-header" onclick="toggleGeneration('db-index')">
+                    <span class="toggle-icon">▾</span>
+                    <span>${escapeHtml(getLocalizedGenerationName('db-index', 'DB 채널'))}</span>
+                </div>
+                <div class="members-grid" id="members-db-index">
+                    ${indexedMembers.map(renderMember).join('')}
+                </div>
+            `;
+            container.appendChild(section);
+            restoreCollabCheckboxes(getState().collabFilter);
+        } catch (error) {
+            console.warn('Failed to append channel index filter:', error);
+        }
+    })();
 }
 
-// 기수 접기/펼치기 토글 (전역 함수)
 window.toggleGeneration = function (genId) {
     const header = document.querySelector(`[data-gen-id="${genId}"] .generation-header`);
     const membersGrid = document.getElementById(`members-${genId}`);
@@ -1512,13 +1591,11 @@ window.toggleGeneration = function (genId) {
     }
 };
 
-// 선택된 멤버 목록 가져오기
 function getSelectedCollabMembers() {
     const checkboxes = document.querySelectorAll('#collab-generation-list input[type="checkbox"]:checked');
     return Array.from(checkboxes).map(cb => cb.value);
 }
 
-// 모든 체크박스 초기화
 function clearAllCheckboxes(container) {
     container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
         cb.checked = false;
@@ -1526,20 +1603,18 @@ function clearAllCheckboxes(container) {
     });
 }
 
-// 콜라보 필터 적용 (다중 멤버 + OR/AND 모드 지원)
-// options: { skipReload: boolean } - true면 페이지 리셋/아카이브 새로고침 안 함
 function applyCollabFilter(selectedMembers, mode = 'or', options = {}) {
     const { skipReload = false } = options;
     const filterBtn = document.getElementById('filter-btn');
+    const normalizedMembers = normalizeCollabFilterMembers(selectedMembers);
 
-    // 상태 업데이트 (skipReload가 true면 페이지 리셋 안 함)
-    const newState = { collabFilter: selectedMembers, collabMode: mode };
+    const newState = { collabFilter: normalizedMembers, collabMode: mode };
     if (!skipReload) {
         newState.archivePage = 1;
+        newState.songsPage = 1;
     }
     setState(newState);
 
-    // 버튼 활성화 상태 표시
     if (filterBtn) {
         if (selectedMembers && selectedMembers.length > 0) {
             filterBtn.classList.add('active');
@@ -1550,11 +1625,12 @@ function applyCollabFilter(selectedMembers, mode = 'or', options = {}) {
         }
     }
 
-    // 아카이브 새로고침 (skipReload가 true면 건너뜀)
     if (!skipReload) {
         const state = getState();
         if (state.currentView === 'archive' || state.currentView === 'home') {
             loadArchives(state.currentChannelId, 1);
+        } else if (state.currentView === 'songs') {
+            loadSongs(state.currentChannelId, 1);
         }
     }
 
@@ -1564,52 +1640,48 @@ function performSearch(query) {
     setState({
         currentSearchQuery: query,
         archivePage: 1,
-        clipsPage: 1
+        clipsPage: 1,
+        songsPage: 1
     });
 
     const state = getState();
     loadViewData(state.currentView);
 }
 
-// === 채널 선택 ===
-// options: { preservePage: boolean } - true면 페이지 리셋 안 함 (새로고침 시 사용)
 function selectChannel(channelId, options = {}) {
-    const { preservePage = false } = options;
+    const { preservePage = false, preserveFilters = preservePage } = options;
 
-    // preservePage가 true면 현재 페이지 유지, 아니면 1로 리셋
-    const newState = {
-        currentChannelId: channelId,
-        currentSearchQuery: ''
-    };
+    const newState = { currentChannelId: channelId };
+    if (!preserveFilters) {
+        newState.currentSearchQuery = '';
+    }
 
     if (!preservePage) {
         newState.archivePage = 1;
         newState.clipsPage = 1;
+        newState.songsPage = 1;
     }
 
     setState(newState);
 
-    // 사이드바 활성 상태 업데이트
     updateActiveChannel(channelId);
 
-    // 테마 적용
     applyChannelTheme(channelId);
 
-    // 로고 이모지 변경
     updateLogoEmoji(channelId);
 
-    // 검색 입력 초기화
+    if (preserveFilters) {
+        restoreFilterUiFromState();
+    } else {
     const searchInput = document.getElementById('search-input');
     if (searchInput) searchInput.value = '';
 
-    // 콜라보 필터 초기화 (preservePage가 true면 새로고침 건너뜀)
     const generationList = document.querySelector('.collab-generation-list');
     if (generationList) {
         clearAllCheckboxes(generationList);
     }
     applyCollabFilter([], 'or', { skipReload: preservePage });
 
-    // 언아카이브 필터 초기화
     const unarchivedCheckbox = document.getElementById('hide-unarchived-checkbox');
     const unarchivedLabel = unarchivedCheckbox?.closest('.unarchived-toggle');
     if (unarchivedCheckbox) {
@@ -1618,7 +1690,6 @@ function selectChannel(channelId, options = {}) {
         setState({ hideUnarchived: false });
     }
 
-    // 날짜 필터 초기화 (빠른 선택 + 개별 날짜)
     clearQuickDateSelection();
     selectedDates = [];
     if (datePickerInstance) {
@@ -1631,65 +1702,110 @@ function selectChannel(channelId, options = {}) {
         filterMonths: null
     });
 
-    // 채널 정보 로드
-    loadChannelInfo(channelId);
+    }
 
-    // 현재 뷰 데이터 로드
+    loadChannelInfo(channelId);
+    updateProfileLiveBadge([]);
+
     const state = getState();
     loadViewData(state.currentView);
 
-    // URL 해시 업데이트
     updateUrlHash(state);
 }
 
-// 로고 이모지 및 헤더 타이틀 변경
 function updateLogoEmoji(channelId) {
     const logoIcon = document.getElementById('logo-icon');
     const headerTitle = document.getElementById('header-title');
 
-    // CHANNELS 배열 또는 내 채널 목록에서 채널 정보 찾기
     let channel = getChannelById(channelId);
     if (!channel) {
         const myChannels = getMyChannels();
         channel = myChannels.find(ch => ch.id === channelId);
     }
 
-    // 이모지 있으면 표시, 없으면 숨김
     if (logoIcon) {
-        if (channel && channel.emoji) {
-            logoIcon.textContent = channel.emoji;
-            logoIcon.style.display = 'inline';
-        } else {
-            logoIcon.textContent = '';
-            logoIcon.style.display = 'none';
-        }
+        logoIcon.textContent = '';
+        logoIcon.style.display = 'none';
     }
 
-    // 헤더 타이틀 변경 (영문 이름 첫 단어 또는 한글 이름)
     if (headerTitle && channel) {
-        // 영문 이름에서 이름 부분 추출 (성 제외)
-        const englishName = channel.englishName || channel.name;
+        const localizedName = getLocalizedTalentName(channel);
+        const englishName = channel.englishName || localizedName;
         const nameParts = englishName.split(' ');
-        const firstName = nameParts.length > 1 ? nameParts[1] : nameParts[0];
-        headerTitle.textContent = firstName || channel.name;
+        const shortName = getLocale() === 'en' && nameParts.length > 1 ? nameParts[1] : localizedName;
+        headerTitle.textContent = shortName || localizedName;
     }
 }
 
-// === 언어 필터 설정 ===
-function setupLangFilter() {
-    const langSelect = document.getElementById('clip-lang-select');
-    if (!langSelect) return;
+function setupAppLanguageControls() {
+    const locale = getLocale();
+    applyLocale(locale);
+    document.querySelectorAll('input[name="app-language"]').forEach(input => {
+        input.checked = input.value === locale;
+        input.closest('.app-language-option')?.classList.toggle('checked', input.checked);
+        input.addEventListener('change', () => {
+            if (!input.checked) return;
+            const nextLocale = setLocale(input.value);
+            applyLocale(nextLocale);
+            document.querySelectorAll('input[name="app-language"]').forEach(option => {
+                option.closest('.app-language-option')?.classList.toggle('checked', option.checked);
+            });
+            refreshLocalizedTalentLabels();
+            updateFilterButtonState(normalizeCollabFilterMembers(getState().collabFilter));
+            window.dispatchEvent(new CustomEvent('locale-updated'));
+        });
+    });
+}
 
-    // 초기값 설정
+function refreshLocalizedTalentLabels() {
     const state = getState();
-    langSelect.value = state.clipLang;
+    renderChannelList(selectChannel);
+    updateActiveChannel(state.currentChannelId);
+    if (state.currentChannelId) {
+        updateLogoEmoji(state.currentChannelId);
+        loadChannelInfo(state.currentChannelId);
+    }
 
-    // 변경 이벤트
-    langSelect.addEventListener('change', (e) => {
-        const newLang = e.target.value;
-        setState({ clipLang: newLang, clipsPage: 1 });
+    const generationList = document.getElementById('collab-generation-list');
+    if (generationList) {
+        renderGenerationList(generationList);
+        restoreCollabCheckboxes(state.collabFilter);
+    }
+}
 
-        // 현재 클립 뷰면 다시 로드
+function updateClipLanguageOptions(langs) {
+    const selected = new Set(Array.isArray(langs) && langs.length > 0 ? langs : ['ja']);
+    document.querySelectorAll('input[name="clip-language"]').forEach(input => {
+        input.checked = selected.has(input.value);
+        input.closest('.clip-language-option')?.classList.toggle('checked', input.checked);
+    });
+}
+
+function getSelectedClipLanguages() {
+    return [...document.querySelectorAll('input[name="clip-language"]:checked')]
+        .map(input => input.value)
+        .filter(value => ['ja', 'ko', 'en', 'zh'].includes(value));
+}
+
+function setupLangFilter() {
+    const filter = document.getElementById('clip-language-filter');
+    if (!filter) return;
+
+    updateClipLanguageOptions(getState().clipLangs || ['ja']);
+
+    filter.addEventListener('change', (event) => {
+        const input = event.target;
+        if (!(input instanceof HTMLInputElement) || input.name !== 'clip-language') return;
+
+        let selectedLangs = getSelectedClipLanguages();
+        if (selectedLangs.length === 0) {
+            input.checked = true;
+            selectedLangs = [input.value];
+        }
+
+        updateClipLanguageOptions(selectedLangs);
+        setState({ clipLangs: selectedLangs, clipsPage: 1 });
+
         const currentState = getState();
         if (currentState.currentView === 'clips') {
             loadClips(currentState.currentChannelId, 1);
@@ -1697,7 +1813,6 @@ function setupLangFilter() {
     });
 }
 
-// === 탤런트 설정 모달 ===
 function setupChannelSettings() {
     const settingsBtn = document.getElementById('settings-btn');
     const modal = document.getElementById('channel-settings-modal');
@@ -1708,37 +1823,66 @@ function setupChannelSettings() {
     const myChannelsList = document.getElementById('my-channels-list');
     const myChannelCount = document.getElementById('my-channel-count');
     const resetBtn = document.getElementById('reset-channels-btn');
-    const startSyncBtn = document.getElementById('start-sync-btn');
     const deleteApiKeyBtn = document.getElementById('delete-api-key-btn');
+    let lastChannelSearchResults = [];
 
     if (!modal) return;
 
-    // 모달 열릴 때 채널 목록 다시 렌더링
+    function updateApiKeyButton() {
+        if (!deleteApiKeyBtn) return;
+        const hasKey = hasUserApiKey();
+        deleteApiKeyBtn.textContent = hasKey ? t('settings.deleteApiKey') : t('settings.enterApiKey');
+        deleteApiKeyBtn.classList.toggle('danger', hasKey);
+    }
+
+    window.addEventListener('api-key-updated', updateApiKeyButton);
+    window.addEventListener('locale-updated', () => {
+        updateApiKeyButton();
+        if (modal.style.display === 'flex') {
+            renderMyChannels();
+            if (lastChannelSearchResults.length > 0) {
+                renderSearchResults(lastChannelSearchResults);
+            }
+        }
+    });
+
     modal.addEventListener('open', () => {
+        updateApiKeyButton();
         renderMyChannels();
     });
 
-    // 내 채널 목록 렌더링
+    function closeChannelSettingsModal() {
+        modal.style.display = 'none';
+    }
+
+    function closeChannelSettingsFromBackdrop(event) {
+        if (event.target !== modal) return;
+        if (event.type === 'contextmenu') event.preventDefault();
+        closeChannelSettingsModal();
+    }
+
     function renderMyChannels() {
         const channels = getMyChannels();
         myChannelCount.textContent = channels.length;
 
-        myChannelsList.innerHTML = channels.map(ch => `
-            <li class="my-channel-item" data-id="${ch.id}">
-                <img src="${ch.icon || 'image/miko.jpg'}" alt="${ch.name}" onerror="this.src='image/miko.jpg'">
-                <span class="channel-name">${ch.name}</span>
-                <button class="remove-btn" data-id="${ch.id}">삭제</button>
+        myChannelsList.innerHTML = channels.map(ch => {
+            const displayName = getLocalizedTalentName(ch);
+            return `
+            <li class="my-channel-item" data-id="${escapeHtml(ch.id)}">
+                ${renderChannelIcon(ch)}
+                <span class="channel-name">${escapeHtml(displayName)}</span>
+                <button class="remove-btn" data-id="${escapeHtml(ch.id)}">${escapeHtml(t('settings.remove'))}</button>
             </li>
-        `).join('');
+        `;
+        }).join('');
+        attachChannelIconFallbacks(myChannelsList);
 
-        // 삭제 버튼 이벤트
         myChannelsList.querySelectorAll('.remove-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 const channelId = btn.dataset.id;
                 const result = removeChannel(channelId);
-                // 에러시만 토스트 표시
                 if (!result.success) {
-                    showToast('❌', result.message);
+                    showToast('오류', result.message);
                 }
                 renderMyChannels();
                 refreshSidebar();
@@ -1746,45 +1890,68 @@ function setupChannelSettings() {
         });
     }
 
-    // 사이드바 새로고침
     function refreshSidebar() {
         renderChannelList(selectChannel);
         const state = getState();
         updateActiveChannel(state.currentChannelId);
     }
 
-    // 검색 결과 렌더링
+    function renderChannelIcon(channel) {
+        const iconUrl = getMemberPhotoUrl(channel) || channel.icon || getRemoteMemberPhotoUrl(channel);
+        const fallback = getRemoteMemberPhotoUrl(channel) || channel.icon || '';
+        const displayName = getLocalizedTalentName(channel);
+        if (!iconUrl) return '';
+
+        return `<img src="${escapeHtml(iconUrl)}" data-fallback="${escapeHtml(fallback)}" alt="${escapeHtml(displayName)}">`;
+    }
+
+    function attachChannelIconFallbacks(root) {
+        root.querySelectorAll('img[data-fallback]').forEach(img => {
+            img.addEventListener('error', () => {
+                const fallback = img.dataset.fallback || '';
+                if (fallback && img.src !== new URL(fallback, window.location.origin).href) {
+                    img.dataset.fallback = '';
+                    img.src = fallback;
+                    return;
+                }
+                img.remove();
+            });
+        });
+    }
+
     function renderSearchResults(channels) {
         if (channels.length === 0) {
-            searchResults.innerHTML = '<div class="no-results">검색 결과가 없습니다</div>';
+            lastChannelSearchResults = [];
+            searchResults.innerHTML = `<div class="no-results">${escapeHtml(t('settings.noResults'))}</div>`;
         } else {
+            lastChannelSearchResults = [...channels];
             const myChannelIds = getMyChannels().map(ch => ch.id);
             searchResults.innerHTML = channels.map(ch => {
                 const isAdded = myChannelIds.includes(ch.id);
+                const displayName = getLocalizedTalentName(ch);
                 return `
-                    <div class="channel-result-item" data-id="${ch.id}">
-                        <img src="${ch.icon || 'image/miko.jpg'}" alt="${ch.name}" onerror="this.src='image/miko.jpg'">
+                    <div class="channel-result-item" data-id="${escapeHtml(ch.id)}">
+                        ${renderChannelIcon(ch)}
                         <div class="channel-result-info">
-                            <div class="channel-result-name">${ch.name}</div>
-                            <div class="channel-result-org">${ch.org || 'Indie'}</div>
+                            <div class="channel-result-name">${escapeHtml(displayName)}</div>
+                            <div class="channel-result-org">${escapeHtml(ch.org || 'Indie')}</div>
                         </div>
                         <button class="add-btn" data-channel="${encodeURIComponent(JSON.stringify(ch))}" ${isAdded ? 'disabled' : ''}>
-                            ${isAdded ? '추가됨' : '추가'}
+                            ${isAdded ? escapeHtml(t('settings.added')) : escapeHtml(t('settings.add'))}
                         </button>
                     </div>
                 `;
             }).join('');
         }
         searchResults.classList.add('active');
+        attachChannelIconFallbacks(searchResults);
 
-        // 추가 버튼 이벤트
         searchResults.querySelectorAll('.add-btn:not([disabled])').forEach(btn => {
             btn.addEventListener('click', () => {
                 const channel = JSON.parse(decodeURIComponent(btn.dataset.channel));
                 const result = addChannel(channel);
-                // 에러시만 토스트 표시
                 if (!result.success) {
-                    showToast('❌', result.message);
+                    showToast('오류', result.message);
                 }
                 if (result.success) {
                     renderMyChannels();
@@ -1797,99 +1964,90 @@ function setupChannelSettings() {
         });
     }
 
-    // 모달 열기
     settingsBtn.addEventListener('click', () => {
         modal.style.display = 'flex';
+        updateApiKeyButton();
         renderMyChannels();
         searchResults.innerHTML = '';
         searchResults.classList.remove('active');
         searchInput.value = '';
+        modal.dispatchEvent(new CustomEvent('open'));
     });
 
-    // 모달 닫기 (외부 클릭 불가)
     closeBtn.addEventListener('click', () => {
-        modal.style.display = 'none';
+        closeChannelSettingsModal();
     });
 
-    // ESC 키로 모달 닫기
+    modal.addEventListener('click', closeChannelSettingsFromBackdrop);
+    modal.addEventListener('contextmenu', closeChannelSettingsFromBackdrop);
+
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && modal.style.display === 'flex') {
-            modal.style.display = 'none';
+            closeChannelSettingsModal();
         }
     });
 
-    // 검색
+    // 寃??
     searchBtn.addEventListener('click', async () => {
         const query = searchInput.value.trim();
         if (query.length < 2) {
-            showToast('⚠️', '2글자 이상 입력하세요');
+            showToast('확인 필요', '2글자 이상 입력하세요');
             return;
         }
 
         searchBtn.disabled = true;
-        searchBtn.textContent = '검색 중...';
+        searchBtn.textContent = t('settings.searching');
 
         try {
             const results = await searchChannels(query);
             renderSearchResults(results);
         } catch (e) {
-            showToast('❌', '검색 실패');
+            showToast('오류', '검색 실패');
         } finally {
             searchBtn.disabled = false;
-            searchBtn.textContent = '검색';
+            searchBtn.textContent = t('settings.search');
         }
     });
 
-    // 엔터 키 검색
     searchInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             searchBtn.click();
         }
     });
 
-    // 초기화 버튼
     resetBtn.addEventListener('click', () => {
         if (confirm('기본 탤런트 목록으로 초기화하시겠습니까?')) {
             saveMyChannels([...DEFAULT_CHANNELS]);
             renderMyChannels();
             refreshSidebar();
-            showToast('✅', '기본값으로 초기화되었습니다');
+            showToast('완료', '기본값으로 초기화되었습니다');
         }
     });
 
-    // 동기화 시작 버튼
-    if (startSyncBtn) {
-        startSyncBtn.addEventListener('click', () => {
-            const apiKey = localStorage.getItem('holodex_api_key');
-            if (!apiKey) {
-                showToast('❌', 'API 키가 없습니다');
-                return;
-            }
-            modal.style.display = 'none';
-            startFullSync(apiKey);
-        });
-    }
-
-    // API 키 삭제 버튼 (D-07: /api/reset 호출 제거 - 보안상 DB 초기화 API 미노출)
     if (deleteApiKeyBtn) {
         deleteApiKeyBtn.addEventListener('click', async () => {
-            if (confirm('API Key를 삭제하시겠습니까?\n\n(동기화된 영상 데이터는 서버에 유지됩니다)')) {
+            const hasKey = hasUserApiKey();
+            if (!hasKey) {
+                window.openApiKeyModal?.({ force: true, returnToSettings: true });
+                return;
+            }
+
+            if (confirm('API Key를 삭제하시겠습니까?\n\n동기화된 영상 데이터는 서버에 유지됩니다')) {
                 localStorage.removeItem('holodex_api_key');
-                showToast('🗑️', 'API Key가 삭제되었습니다');
-                location.reload();
+                window.dispatchEvent(new CustomEvent('api-key-updated'));
+                updateApiKeyButton();
+                showToast('삭제 완료', 'API Key가 삭제되었습니다');
             }
         });
     }
 }
 
-// === 뷰 데이터 로드 ===
 function loadViewData(view) {
     const state = getState();
     if (!state.currentChannelId) return;
 
     switch (view) {
         case 'home':
-            // loadChannelInfo에서 이미 로드됨
             break;
         case 'live':
             loadLiveStreams(state.currentChannelId);
@@ -1900,30 +2058,41 @@ function loadViewData(view) {
         case 'clips':
             loadClips(state.currentChannelId, state.clipsPage);
             break;
+        case 'songs':
+            loadSongs(state.currentChannelId, state.songsPage || 1);
+            break;
         case 'stats':
             loadStats(state.currentChannelId);
             break;
     }
 }
 
-// === 페이지 변경 핸들러 ===
 function handlePageChange(page, type) {
     const state = getState();
 
     if (type === 'archive') {
         setState({ archivePage: page });
         loadArchives(state.currentChannelId, page);
-    } else {
+    } else if (type === 'clips') {
         setState({ clipsPage: page });
         loadClips(state.currentChannelId, page);
+    } else if (type === 'songs') {
+        setState({ songsPage: page });
+        loadSongs(state.currentChannelId, page);
     }
 
     updateUrlHash(getState());
 }
 
-// === 라이브 스트림 로드 ===
+function updateProfileLiveBadge(streams) {
+    const badge = document.getElementById('profile-live-badge');
+    if (!badge) return;
+
+    const isLive = Array.isArray(streams) && streams.some(stream => stream.status === 'live');
+    badge.classList.toggle('show', isLive);
+}
+
 async function loadLiveStreams(channelId) {
-    // 요청 중복/역전 방지
     const serial = ++requestSerials.live;
 
     const container = document.getElementById('live-container');
@@ -1932,8 +2101,8 @@ async function loadLiveStreams(channelId) {
     try {
         const streams = await getLiveStreams(channelId);
 
-        // 늦게 도착한 응답 무시
         if (serial !== requestSerials.live) return;
+        updateProfileLiveBadge(streams);
 
         container.innerHTML = '';
 
@@ -1948,10 +2117,16 @@ async function loadLiveStreams(channelId) {
         });
     } catch {
         if (serial !== requestSerials.live) return;
+        updateProfileLiveBadge([]);
         container.innerHTML = '<p class="error-text">Failed to load streams.</p>';
     }
 }
-// === 아카이브/노래 탭 셋업 ===
+const ARCHIVE_TAB_TITLES = {
+    all: '아카이브',
+    collab: '콜라보',
+    music: '노래'
+};
+
 function setupArchiveTabs() {
     const tabContainer = document.getElementById('archive-tabs');
     if (!tabContainer) return;
@@ -1963,51 +2138,223 @@ function setupArchiveTabs() {
         const type = tab.dataset.type;
         const state = getState();
 
-        // 이미 활성 탭이면 무시
         if (state.videoType === type) return;
 
-        // 탭 UI 업데이트
         tabContainer.querySelectorAll('.archive-tab').forEach(t => {
             t.classList.toggle('active', t === tab);
         });
 
-        // 섹션 제목 업데이트
         const sectionHeader = document.querySelector('#archive-view .section-header h3');
         if (sectionHeader) {
-            sectionHeader.innerHTML = type === 'music'
-                ? '<span class="icon">🎵</span> 노래'
-                : '<span class="icon">📚</span> 아카이브';
+            sectionHeader.textContent = ARCHIVE_TAB_TITLES[type] || ARCHIVE_TAB_TITLES.all;
         }
 
-        // 상태 업데이트 + 페이지 리셋 + 재로드
+        resetActiveFilters({ resetSearch: true });
+
         setState({ videoType: type, archivePage: 1 });
         updateUrlHash(getState());
         loadArchives(state.currentChannelId, 1);
     });
 }
 
-// 아카이브 탭 UI 복원 (새로고침 시)
 function restoreArchiveTabUI(type) {
     const tabContainer = document.getElementById('archive-tabs');
     if (!tabContainer) return;
 
-    // 탭 active 상태 업데이트
     tabContainer.querySelectorAll('.archive-tab').forEach(t => {
         t.classList.toggle('active', t.dataset.type === type);
     });
 
-    // 섹션 타이틀 업데이트
     const sectionHeader = document.querySelector('#archive-view .section-header h3');
     if (sectionHeader) {
-        sectionHeader.innerHTML = type === 'music'
-            ? '<span class="icon">🎵</span> 노래'
-            : '<span class="icon">📚</span> 아카이브';
+        sectionHeader.textContent = ARCHIVE_TAB_TITLES[type] || ARCHIVE_TAB_TITLES.all;
     }
 }
 
-// === 아카이브 로드 ===
+function setupSongControls() {
+    const sortSelect = document.getElementById('song-sort-select');
+    const categoryTabs = document.getElementById('song-category-tabs');
+
+    sortSelect?.addEventListener('change', () => {
+        setState({
+            songSort: sortSelect.value,
+            songsPage: 1
+        });
+        const state = getState();
+        if (state.currentView === 'songs') {
+            loadSongs(state.currentChannelId, 1);
+        }
+    });
+
+    categoryTabs?.addEventListener('click', event => {
+        const tab = event.target.closest('.song-category-tab');
+        if (!tab) return;
+
+        const category = tab.dataset.category || 'all';
+        setState({
+            songCategory: category,
+            songsPage: 1
+        });
+        updateSongCategoryTabs(category);
+        const state = getState();
+        if (state.currentView === 'songs') {
+            loadSongs(state.currentChannelId, 1);
+        }
+    });
+}
+
+function setupSongDetailModal() {
+    const modal = document.getElementById('song-detail-modal');
+    const closeBtn = document.getElementById('close-song-detail');
+    if (!modal) return;
+
+    const close = () => closeSongDetailModal();
+    closeBtn?.addEventListener('click', close);
+    modal.addEventListener('click', event => {
+        if (event.target === modal) close();
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && modal.classList.contains('show')) close();
+    });
+    document.addEventListener('song-detail-request', event => {
+        openSongDetailModal(event.detail?.song);
+    });
+}
+
+function closeSongDetailModal() {
+    const modal = document.getElementById('song-detail-modal');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.setAttribute('aria-hidden', 'true');
+}
+
+function setSongDetailLoading(song) {
+    const titleEl = document.getElementById('song-detail-title');
+    const subtitleEl = document.getElementById('song-detail-subtitle');
+    const countEl = document.getElementById('song-detail-count');
+    const listEl = document.getElementById('song-detail-list');
+
+    if (titleEl) titleEl.textContent = song?.song_title || '노래 상세';
+    if (subtitleEl) subtitleEl.textContent = song?.original_artist || '';
+    if (countEl) countEl.textContent = '';
+    if (listEl) listEl.innerHTML = '<div class="loading-spinner">노래 기록을 불러오는 중...</div>';
+}
+
+async function openSongDetailModal(song) {
+    if (!song) return;
+
+    const modal = document.getElementById('song-detail-modal');
+    const listEl = document.getElementById('song-detail-list');
+    const countEl = document.getElementById('song-detail-count');
+    if (!modal || !listEl) return;
+
+    const serial = ++songDetailSerial;
+    setSongDetailLoading(song);
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+
+    try {
+        const loader = window.getSongDetails;
+        if (typeof loader !== 'function') {
+            throw new Error('Song detail API is not available');
+        }
+        const result = await loader(song);
+        if (serial !== songDetailSerial) return;
+
+        const items = result.items || [];
+        if (countEl) {
+            countEl.textContent = `${result.total || items.length}개 기록`;
+        }
+        listEl.innerHTML = '';
+
+        if (items.length === 0) {
+            listEl.innerHTML = '<p class="empty-text">같은 곡 기록이 없습니다.</p>';
+            return;
+        }
+
+        items.forEach(item => {
+            listEl.appendChild(createSongCard(item, { showDetails: false }));
+        });
+    } catch (error) {
+        if (serial !== songDetailSerial) return;
+        listEl.innerHTML = `<p class="error-text">상세 정보를 불러오지 못했습니다. ${escapeHtml(error?.message || 'Unknown error')}</p>`;
+    }
+}
+
+function renderSongSummary(summary = {}) {
+    const totalEl = document.getElementById('song-total-count');
+    const videoEl = document.getElementById('song-video-count');
+    const latestEl = document.getElementById('song-latest-date');
+
+    if (totalEl) totalEl.textContent = String(summary.totalSongs || 0);
+    if (videoEl) videoEl.textContent = String(summary.totalVideos || 0);
+    if (latestEl) latestEl.textContent = summary.latestAt ? summary.latestAt.slice(0, 10) : '-';
+    updateSongCategoryTabs(getState().songCategory || 'all', summary.categoryCounts || {});
+}
+
+function updateSongCategoryTabs(category, counts = {}) {
+    document.querySelectorAll('.song-category-tab').forEach(tab => {
+        const isActive = tab.dataset.category === category;
+        tab.classList.toggle('active', isActive);
+        const countEl = tab.querySelector('[data-song-count]');
+        if (countEl) {
+            countEl.textContent = String(counts[tab.dataset.category] || 0);
+        }
+    });
+}
+
+function renderSongEmpty(container, state) {
+    const message = state.currentSearchQuery
+        ? '검색 결과가 없습니다.'
+        : '노래 데이터가 아직 없습니다. 서버 자동 갱신 후 다시 확인해주세요.';
+    container.innerHTML = `<p class="empty-text">${message}</p>`;
+}
+
+async function loadSongs(channelId, page) {
+    const serial = ++requestSerials.songs;
+    const container = document.getElementById('songs-container');
+    if (!container) return;
+
+    const pagination = document.getElementById('songs-pagination');
+    if (pagination) pagination.innerHTML = '';
+    container.innerHTML = '<div class="loading-spinner">Loading songs...</div>';
+
+    try {
+        const state = getState();
+        const offset = (page - 1) * ITEMS_PER_PAGE;
+        const sort = state.songSort || 'recent';
+        const category = state.songCategory || 'all';
+        updateSongCategoryTabs(category);
+        const result = await getSongs(channelId, offset, state.currentSearchQuery, sort, category, state.collabFilter, state.collabMode || 'or');
+        if (serial !== requestSerials.songs) return;
+
+        const songs = result.items || [];
+        const totalSongs = result.total || 0;
+        renderSongSummary(result.summary || {});
+
+        const maxPage = Math.max(1, Math.ceil(totalSongs / ITEMS_PER_PAGE));
+        if (page > maxPage && totalSongs > 0) {
+            setState({ songsPage: maxPage });
+            return loadSongs(channelId, maxPage);
+        }
+
+        container.innerHTML = '';
+        if (songs.length === 0) {
+            renderSongEmpty(container, state);
+            return;
+        }
+
+        songs.forEach(song => {
+            container.appendChild(createSongCard(song));
+        });
+        renderPagination('songs', page, totalSongs, handlePageChange);
+    } catch (error) {
+        if (serial !== requestSerials.songs) return;
+        container.innerHTML = `<p class="error-text">Failed to load songs: ${escapeHtml(error?.message || 'Unknown error')}</p>`;
+    }
+}
+
 async function loadArchives(channelId, page) {
-    // 요청 중복/역전 방지
     const serial = ++requestSerials.archive;
 
     const container = document.getElementById('archive-container');
@@ -2021,7 +2368,6 @@ async function loadArchives(channelId, page) {
 
         let result = await getRecentVideos(channelId, offset, state.currentSearchQuery, channelName, state.collabFilter, state.collabMode || 'or', state.hideUnarchived || false, state.filterDates || [], state.filterYears, state.filterMonths, state.videoType || 'all');
 
-        // 로컬 DB만 사용 - API 폴백 제거 (Holodex API 호출 최소화)
 
         if (!result) {
             throw new Error('API returned null response');
@@ -2030,14 +2376,12 @@ async function loadArchives(channelId, page) {
         const videos = result.items || [];
         const totalVideos = result.total || 0;
 
-        // 현재 페이지가 총 페이지 수를 초과하면 마지막 유효 페이지로 이동
         const maxPage = Math.max(1, Math.ceil(totalVideos / ITEMS_PER_PAGE));
         if (page > maxPage && totalVideos > 0) {
             setState({ archivePage: maxPage });
             return loadArchives(channelId, maxPage);
         }
 
-        // 늦게 도착한 응답 무시
         if (serial !== requestSerials.archive) return;
 
         container.innerHTML = '';
@@ -2046,8 +2390,8 @@ async function loadArchives(channelId, page) {
             if (state.isSyncing) {
                 container.innerHTML = `
                     <div class="sync-status">
-                        <p>⏳ 데이터를 불러오는 중입니다...</p>
-                        <p class="sub-text">API에서 최신 아카이브를 가져오고 있습니다.</p>
+                        <p>데이터를 불러오는 중입니다...</p>
+                        <p class="sub-text">로컬 DB에서 아카이브를 불러오고 있습니다.</p>
                     </div>
                 `;
             } else {
@@ -2057,33 +2401,40 @@ async function loadArchives(channelId, page) {
         }
 
         videos.forEach((video, index) => {
-            const card = createVideoCard(video, index);
+            const card = createVideoCard(video, index, {
+                currentChannelId: channelId,
+                showHostChannel: state.videoType === 'collab'
+            });
             container.appendChild(card);
         });
 
         renderPagination('archive', page, totalVideos || 1000, handlePageChange);
     } catch (error) {
         if (serial !== requestSerials.archive) return;
-        container.innerHTML = `<p class="error-text">Failed to load archives: ${error.message}</p>`;
+        container.innerHTML = `<p class="error-text">Failed to load archives: ${escapeHtml(error?.message || 'Unknown error')}</p>`;
     }
 }
 
-// === 클립 로드 ===
 async function loadClips(channelId, page) {
-    // 요청 중복/역전 방지
     const serial = ++requestSerials.clips;
 
     const container = document.getElementById('clips-container');
-    container.innerHTML = '<p class="loading-text">Loading clips...</p>';
+    container.innerHTML = `<p class="loading-text">${escapeHtml(t('clips.loading'))}</p>`;
 
     try {
         const state = getState();
+        if (!hasUserApiKey()) {
+            if (serial !== requestSerials.clips) return;
+            container.innerHTML = `<p class="empty-text">${escapeHtml(t('apiModal.body'))}</p>`;
+            window.openApiKeyModal?.();
+            return;
+        }
+
         const offset = (page - 1) * ITEMS_PER_PAGE;
         const channel = getChannelById(channelId);
         const channelName = channel ? (channel.englishName || channel.name) : '';
 
-        // 언어 필터 포함하여 클립 로드
-        const result = await getClips(channelId, offset, state.currentSearchQuery, channelName, state.clipLang);
+        const result = await getClips(channelId, offset, state.currentSearchQuery, channelName, state.clipLangs);
 
         if (!result) {
             throw new Error('Failed to fetch clips');
@@ -2092,13 +2443,12 @@ async function loadClips(channelId, page) {
         const clips = result.items || [];
         const totalClips = result.total || 0;
 
-        // 늦게 도착한 응답 무시
         if (serial !== requestSerials.clips) return;
 
         container.innerHTML = '';
 
         if (clips.length === 0) {
-            container.innerHTML = '<p class="empty-text">클립이 없습니다.</p>';
+            container.innerHTML = `<p class="empty-text">${escapeHtml(t('clips.noClips'))}</p>`;
             return;
         }
 
@@ -2110,27 +2460,23 @@ async function loadClips(channelId, page) {
         renderPagination('clips', page, totalClips || 500, handlePageChange);
     } catch (error) {
         if (serial !== requestSerials.clips) return;
-        container.innerHTML = `<p class="error-text">Failed to load clips: ${error.message}</p>`;
+        container.innerHTML = `<p class="error-text">${escapeHtml(t('clips.loadFailed'))}: ${escapeHtml(error?.message || 'Unknown error')}</p>`;
     }
 }
 
-// === 차트 인스턴스 (재사용을 위해 전역 관리) ===
 let yearlyChartInstance = null;
 let monthlyChartInstance = null;
 let yearlyMembershipChartInstance = null;
 let membershipChartInstance = null;
 let yearlyCollabChartInstance = null;
 
-// === 통계 로드 ===
 async function loadStats(channelId) {
     const container = document.querySelector('.stats-container');
     if (!container) return;
 
-    // 로딩 표시
     container.innerHTML = '<div class="loading-spinner">통계 로딩 중...</div>';
 
     try {
-        // 병렬로 데이터 로드
         const [yearlyRes, yearlyMembershipRes, collabRes, topicRes] = await Promise.all([
             window.getYearlyStats(channelId),
             window.getYearlyMembershipStats(channelId),
@@ -2138,7 +2484,6 @@ async function loadStats(channelId) {
             window.getTopicStats(channelId)
         ]);
 
-        // 컨테이너 초기화 - 8개 섹션
         container.innerHTML = `
             <div class="stats-card">
                 <h4>연도별 방송 통계</h4>
@@ -2152,12 +2497,12 @@ async function loadStats(channelId) {
                 <canvas id="monthly-chart"></canvas>
             </div>
             <div class="stats-card">
-                <h4>연도별 멤버십 한정 방송 통계</h4>
+                <h4>연도별 멤버십 방송 통계</h4>
                 <canvas id="yearly-membership-chart"></canvas>
             </div>
             <div class="stats-card">
                 <div class="stats-card-header">
-                    <h4>월별 멤버십 한정 방송 통계</h4>
+                    <h4>월별 멤버십 방송 통계</h4>
                     <select id="membership-year-select"></select>
                 </div>
                 <canvas id="membership-chart"></canvas>
@@ -2174,40 +2519,32 @@ async function loadStats(channelId) {
                 <div id="yearly-collab-stats-container" class="collab-stats"></div>
             </div>
             <div class="stats-card">
-                <h4>컨텐츠 TOP 10</h4>
+                <h4>콘텐츠 TOP 10</h4>
                 <canvas id="topic-chart"></canvas>
             </div>
             <div class="stats-card">
                 <div class="stats-card-header">
-                    <h4>연도별 컨텐츠 TOP 10</h4>
+                    <h4>연도별 콘텐츠 TOP 10</h4>
                     <select id="yearly-topic-year-select"></select>
                 </div>
                 <canvas id="yearly-topic-chart"></canvas>
             </div>
         `;
 
-        // 년도별 차트 렌더링
         renderYearlyChart(yearlyRes.items || []);
 
-        // 월별 연도 선택기 설정
         setupMonthlyYearSelect(channelId, yearlyRes.items || []);
 
-        // 년도별 멤버십 차트 렌더링
         renderYearlyMembershipChart(yearlyMembershipRes.items || []);
 
-        // 멤버십 연도 선택기 설정
         setupMembershipYearSelect(channelId, yearlyRes.items || []);
 
-        // 콜라보 통계 렌더링
         renderCollabStats(collabRes.items || []);
 
-        // 연도별 콜라보 선택기 설정
         setupYearlyCollabSelect(channelId, yearlyRes.items || []);
 
-        // 컨텐츠(Topic) 통계 렌더링
         renderTopicStats(topicRes.items || []);
 
-        // 연도별 컨텐츠 선택기 설정
         setupYearlyTopicSelect(channelId, yearlyRes.items || []);
 
     } catch (error) {
@@ -2216,12 +2553,10 @@ async function loadStats(channelId) {
     }
 }
 
-// === 년도별 차트 렌더링 ===
 function renderYearlyChart(data) {
     const ctx = document.getElementById('yearly-chart');
     if (!ctx) return;
 
-    // 기존 차트 파괴
     if (yearlyChartInstance) {
         yearlyChartInstance.destroy();
     }
@@ -2268,17 +2603,15 @@ function renderYearlyChart(data) {
     });
 }
 
-// === 월별 방송 차트 렌더링 ===
 function renderMonthlyChart(data) {
     const ctx = document.getElementById('monthly-chart');
     if (!ctx) return;
 
-    // 기존 차트 파괴
     if (monthlyChartInstance) {
         monthlyChartInstance.destroy();
     }
 
-    const labels = data.map(d => `${d.month}월`);
+    const labels = data.map(d => String(d.month) + '월');
     const values = data.map(d => d.count);
 
     monthlyChartInstance = new Chart(ctx, {
@@ -2297,7 +2630,7 @@ function renderMonthlyChart(data) {
         options: {
             responsive: true,
             layout: {
-                padding: { top: 25 }  // 상단 라벨 여백
+                padding: { top: 25 }
             },
             plugins: {
                 legend: { display: false },
@@ -2311,7 +2644,7 @@ function renderMonthlyChart(data) {
             scales: {
                 y: {
                     beginAtZero: true,
-                    suggestedMax: Math.max(...values) * 1.15,  // 15% 여유
+                    suggestedMax: Math.max(...values) * 1.15,  // 15% ?ъ쑀
                     ticks: { color: 'rgba(0,0,0,0.7)' },
                     grid: { color: 'rgba(0,0,0,0.1)' }
                 },
@@ -2325,43 +2658,39 @@ function renderMonthlyChart(data) {
     });
 }
 
-// === 월별 연도 선택기 설정 ===
 function setupMonthlyYearSelect(channelId, yearlyData) {
     const select = document.getElementById('monthly-year-select');
     if (!select) return;
 
-    // 연도 옵션 생성
     const years = yearlyData.map(d => d.year).filter(y => y);
     if (years.length === 0) {
         select.innerHTML = '<option>데이터 없음</option>';
         return;
     }
 
-    select.innerHTML = years.map(y => `<option value="${y}">${y}년</option>`).join('');
+    select.innerHTML = years
+        .map(y => '<option value="' + String(y) + '">' + String(y) + '년</option>')
+        .join('');
 
-    // 최신 연도 선택
     select.value = years[years.length - 1];
 
-    // 변경 이벤트
     select.addEventListener('change', async () => {
         const year = select.value;
         const res = await window.getMonthlyStats(channelId, year);
         renderMonthlyChart(res.items || []);
     });
 
-    // 초기 로드
+    // 珥덇린 濡쒕뱶
     (async () => {
         const res = await window.getMonthlyStats(channelId, select.value);
         renderMonthlyChart(res.items || []);
     })();
 }
 
-// === 년도별 멤버십 차트 렌더링 ===
 function renderYearlyMembershipChart(data) {
     const ctx = document.getElementById('yearly-membership-chart');
     if (!ctx) return;
 
-    // 기존 차트 파괴
     if (yearlyMembershipChartInstance) {
         yearlyMembershipChartInstance.destroy();
     }
@@ -2408,48 +2737,44 @@ function renderYearlyMembershipChart(data) {
     });
 }
 
-// === 멤버십 연도 선택기 설정 ===
 function setupMembershipYearSelect(channelId, yearlyData) {
     const select = document.getElementById('membership-year-select');
     if (!select) return;
 
-    // 연도 옵션 생성
     const years = yearlyData.map(d => d.year).filter(y => y);
     if (years.length === 0) {
         select.innerHTML = '<option>데이터 없음</option>';
         return;
     }
 
-    select.innerHTML = years.map(y => `<option value="${y}">${y}년</option>`).join('');
+    select.innerHTML = years
+        .map(y => '<option value="' + String(y) + '">' + String(y) + '년</option>')
+        .join('');
 
-    // 최신 연도 선택
     select.value = years[years.length - 1];
 
-    // 변경 이벤트
     select.addEventListener('change', async () => {
         const year = select.value;
         const res = await window.getMembershipStats(channelId, year);
         renderMembershipChart(res.items || []);
     });
 
-    // 초기 로드
+    // 珥덇린 濡쒕뱶
     (async () => {
         const res = await window.getMembershipStats(channelId, select.value);
         renderMembershipChart(res.items || []);
     })();
 }
 
-// === 월별 멤버십 차트 렌더링 ===
 function renderMembershipChart(data) {
     const ctx = document.getElementById('membership-chart');
     if (!ctx) return;
 
-    // 기존 차트 파괴
     if (membershipChartInstance) {
         membershipChartInstance.destroy();
     }
 
-    const labels = data.map(d => `${d.month}월`);
+    const labels = data.map(d => String(d.month) + '월');
     const values = data.map(d => d.count);
 
     membershipChartInstance = new Chart(ctx, {
@@ -2468,7 +2793,7 @@ function renderMembershipChart(data) {
         options: {
             responsive: true,
             layout: {
-                padding: { top: 25 }  // 상단 라벨 여백
+                padding: { top: 25 }
             },
             plugins: {
                 legend: { display: false },
@@ -2482,7 +2807,7 @@ function renderMembershipChart(data) {
             scales: {
                 y: {
                     beginAtZero: true,
-                    suggestedMax: Math.max(...values) * 1.15,  // 15% 여유
+                    suggestedMax: Math.max(...values) * 1.15,  // 15% ?ъ쑀
                     ticks: { color: 'rgba(0,0,0,0.7)' },
                     grid: { color: 'rgba(0,0,0,0.1)' }
                 },
@@ -2496,7 +2821,48 @@ function renderMembershipChart(data) {
     });
 }
 
-// === 콜라보 통계 렌더링 ===
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function renderCollabAvatar(member) {
+    const iconUrl = getMemberPhotoUrl(member);
+    const fallback = getRemoteMemberPhotoUrl(member);
+    const name = getLocalizedTalentName(member);
+    if (!iconUrl) return '';
+
+    return `<img src="${escapeHtml(iconUrl)}"
+        data-fallback="${escapeHtml(fallback)}"
+        alt="${escapeHtml(name)}"
+        loading="lazy"
+        decoding="async">`;
+}
+
+function removeBrokenCollabAvatars(container) {
+    const useFallbackOrRemove = img => {
+        const fallback = img.dataset.fallback || '';
+        if (fallback && img.src !== new URL(fallback, window.location.origin).href) {
+            img.dataset.fallback = '';
+            img.src = fallback;
+            return;
+        }
+        img.remove();
+    };
+
+    const removeBroken = img => {
+        if (!img.complete || img.naturalWidth > 0) return;
+        useFallbackOrRemove(img);
+    };
+
+    container.querySelectorAll('.collab-item img').forEach(img => {
+        img.addEventListener('error', () => useFallbackOrRemove(img));
+        removeBroken(img);
+    });
+}
+
 function renderCollabStats(data) {
     const container = document.getElementById('collab-stats-container');
     if (!container) return;
@@ -2507,56 +2873,48 @@ function renderCollabStats(data) {
     }
 
     container.innerHTML = data.map(member => {
-        // 1순위: API에서 온 photo, 2순위: MEMBER_PHOTOS 폴백
-        const iconUrl = member.photo || MEMBER_PHOTOS[member.id] || '';
-        // 이미지가 있으면 표시, 없으면 텍스트만
-        const imgHtml = iconUrl
-            ? `<img src="${iconUrl}" alt="${member.name}">`
-            : '';
         return `
             <div class="collab-item">
-                ${imgHtml}
+                ${renderCollabAvatar(member)}
                 <div class="collab-info">
-                    <span class="collab-name">${member.name}</span>
-                    <span class="collab-count">${member.count}회 콜라보</span>
+                    <span class="collab-name">${escapeHtml(getLocalizedTalentName(member))}</span>
+                    <span class="collab-count">${escapeHtml(String(member.count))}회 콜라보</span>
                 </div>
             </div>
         `;
     }).join('');
+    removeBrokenCollabAvatars(container);
 }
 
-// === 연도별 콜라보 선택기 설정 ===
 function setupYearlyCollabSelect(channelId, yearlyData) {
     const select = document.getElementById('yearly-collab-year-select');
     if (!select) return;
 
-    // 연도 옵션 생성
     const years = yearlyData.map(d => d.year).filter(y => y);
     if (years.length === 0) {
         select.innerHTML = '<option>데이터 없음</option>';
         return;
     }
 
-    select.innerHTML = years.map(y => `<option value="${y}">${y}년</option>`).join('');
+    select.innerHTML = years
+        .map(y => '<option value="' + String(y) + '">' + String(y) + '년</option>')
+        .join('');
 
-    // 최신 연도 선택
     select.value = years[years.length - 1];
 
-    // 변경 이벤트
     select.addEventListener('change', async () => {
         const year = select.value;
         const res = await window.getYearlyCollabStats(channelId, year);
         renderYearlyCollabStats(res.items || []);
     });
 
-    // 초기 로드
+    // 珥덇린 濡쒕뱶
     (async () => {
         const res = await window.getYearlyCollabStats(channelId, select.value);
         renderYearlyCollabStats(res.items || []);
     })();
 }
 
-// === 연도별 콜라보 통계 렌더링 ===
 function renderYearlyCollabStats(data) {
     const container = document.getElementById('yearly-collab-stats-container');
     if (!container) return;
@@ -2567,34 +2925,26 @@ function renderYearlyCollabStats(data) {
     }
 
     container.innerHTML = data.map(member => {
-        // 1순위: API에서 온 photo, 2순위: MEMBER_PHOTOS 폴백
-        const iconUrl = member.photo || MEMBER_PHOTOS[member.id] || '';
-        // 이미지가 있으면 표시, 없으면 텍스트만
-        const imgHtml = iconUrl
-            ? `<img src="${iconUrl}" alt="${member.name}">`
-            : '';
         return `
             <div class="collab-item">
-                ${imgHtml}
+                ${renderCollabAvatar(member)}
                 <div class="collab-info">
-                    <span class="collab-name">${member.name}</span>
-                    <span class="collab-count">${member.count}회 콜라보</span>
+                    <span class="collab-name">${escapeHtml(getLocalizedTalentName(member))}</span>
+                    <span class="collab-count">${escapeHtml(String(member.count))}회 콜라보</span>
                 </div>
             </div>
         `;
     }).join('');
+    removeBrokenCollabAvatars(container);
 }
 
-// Chart.js 인스턴스 저장용 변수
 let topicChartInstance = null;
 let yearlyTopicChartInstance = null;
 
-// === 컨텐츠(Topic) 통계 렌더링 - 가로 막대그래프 ===
 function renderTopicStats(data) {
     const ctx = document.getElementById('topic-chart');
     if (!ctx) return;
 
-    // 기존 차트 파괴
     if (topicChartInstance) {
         topicChartInstance.destroy();
     }
@@ -2603,7 +2953,6 @@ function renderTopicStats(data) {
         return;
     }
 
-    // 라벨과 값 준비 (언더스코어 → 공백)
     const labels = data.map(d => d.topic.replace(/_/g, ' '));
     const values = data.map(d => d.count);
 
@@ -2621,11 +2970,11 @@ function renderTopicStats(data) {
             }]
         },
         options: {
-            indexAxis: 'y',  // 가로 막대그래프
+            indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
             layout: {
-                padding: { right: 50 }  // 오른쪽 라벨 여백
+                padding: { right: 50 }
             },
             plugins: {
                 legend: { display: false },
@@ -2640,7 +2989,7 @@ function renderTopicStats(data) {
             scales: {
                 x: {
                     beginAtZero: true,
-                    suggestedMax: Math.max(...values) * 1.15,  // 15% 여유
+                    suggestedMax: Math.max(...values) * 1.15,  // 15% ?ъ쑀
                     grid: { display: false }
                 },
                 y: {
@@ -2651,16 +3000,13 @@ function renderTopicStats(data) {
         plugins: [ChartDataLabels]
     });
 
-    // 차트 높이 자동 조정
     ctx.parentElement.style.height = Math.max(300, data.length * 35) + 'px';
 }
 
-// === 연도별 컨텐츠 선택기 설정 ===
 function setupYearlyTopicSelect(channelId, yearlyData) {
     const select = document.getElementById('yearly-topic-year-select');
     if (!select) return;
 
-    // 연도 옵션 생성
     const years = yearlyData.map(d => d.year).filter(y => y);
     if (years.length === 0) {
         select.innerHTML = '<option>데이터 없음</option>';
@@ -2669,29 +3015,25 @@ function setupYearlyTopicSelect(channelId, yearlyData) {
 
     select.innerHTML = years.map(y => `<option value="${y}">${y}년</option>`).join('');
 
-    // 최신 연도 선택
     select.value = years[years.length - 1];
 
-    // 변경 이벤트
     select.addEventListener('change', async () => {
         const year = select.value;
         const res = await window.getYearlyTopicStats(channelId, year);
         renderYearlyTopicStats(res.items || []);
     });
 
-    // 초기 로드
+    // 珥덇린 濡쒕뱶
     (async () => {
         const res = await window.getYearlyTopicStats(channelId, select.value);
         renderYearlyTopicStats(res.items || []);
     })();
 }
 
-// === 연도별 컨텐츠 통계 렌더링 - 가로 막대그래프 ===
 function renderYearlyTopicStats(data) {
     const ctx = document.getElementById('yearly-topic-chart');
     if (!ctx) return;
 
-    // 기존 차트 파괴
     if (yearlyTopicChartInstance) {
         yearlyTopicChartInstance.destroy();
     }
@@ -2717,11 +3059,11 @@ function renderYearlyTopicStats(data) {
             }]
         },
         options: {
-            indexAxis: 'y',  // 가로 막대그래프
+            indexAxis: 'y',
             responsive: true,
             maintainAspectRatio: false,
             layout: {
-                padding: { right: 50 }  // 오른쪽 라벨 여백
+                padding: { right: 50 }
             },
             plugins: {
                 legend: { display: false },
@@ -2736,7 +3078,7 @@ function renderYearlyTopicStats(data) {
             scales: {
                 x: {
                     beginAtZero: true,
-                    suggestedMax: Math.max(...values) * 1.15,  // 15% 여유
+                    suggestedMax: Math.max(...values) * 1.15,  // 15% ?ъ쑀
                     grid: { display: false }
                 },
                 y: {
@@ -2747,47 +3089,19 @@ function renderYearlyTopicStats(data) {
         plugins: [ChartDataLabels]
     });
 
-    // 차트 높이 자동 조정
     ctx.parentElement.style.height = Math.max(300, data.length * 35) + 'px';
 }
 
-// === 채널 정보 로드 ===
-async function loadChannelInfo(channelId) {
-    // 캐시 확인
-    const cacheKey = `channel_info_${channelId}`;
-    const cached = localStorage.getItem(cacheKey);
-
-    if (cached) {
-        const { data, expiry } = JSON.parse(cached);
-        if (expiry > Date.now()) {
-            renderChannelProfile(data);
-            return;
-        }
-    }
-
-    // 먼저 로컬 데이터로 기본 표시
+function loadChannelInfo(channelId) {
     const localChannel = getChannelById(channelId);
     if (localChannel) {
         renderLocalChannelProfile(localChannel);
+        return;
     }
 
-    // API에서 로드 시도
-    try {
-        const info = await getChannelInfo(channelId);
-        if (info) {
-            // 캐시 저장
-            localStorage.setItem(cacheKey, JSON.stringify({
-                data: info,
-                expiry: Date.now() + 24 * 60 * 60 * 1000
-            }));
-            renderChannelProfile(info);
-        }
-    } catch {
-        // API 실패 시 로컬 데이터 유지 (이미 렌더링됨)
-    }
+    renderLocalChannelProfile({ id: channelId, name: channelId, englishName: '', icon: '' });
 }
 
-// 로컬 채널 데이터로 기본 프로필 표시
 function renderLocalChannelProfile(channel) {
     const nameEl = document.getElementById('channel-name');
     const descEl = document.getElementById('channel-desc');
@@ -2796,57 +3110,34 @@ function renderLocalChannelProfile(channel) {
     const subCountEl = document.getElementById('sub-count');
     const videoCountEl = document.getElementById('video-count');
 
-    if (nameEl) nameEl.textContent = channel.name;
+    if (nameEl) nameEl.textContent = getLocalizedTalentName(channel);
     if (descEl) descEl.textContent = channel.englishName || '';
-    if (iconEl) iconEl.src = channel.icon || '';
+    if (iconEl) {
+        const primaryIcon = getMemberPhotoUrl(channel) || channel.icon || getRemoteMemberPhotoUrl(channel) || '';
+        const fallbackIcon = getRemoteMemberPhotoUrl(channel);
+        iconEl.src = primaryIcon;
+        iconEl.dataset.fallback = fallbackIcon;
+        iconEl.onerror = () => {
+            const fallback = iconEl.dataset.fallback || '';
+            if (fallback && iconEl.src !== new URL(fallback, window.location.origin).href) {
+                iconEl.dataset.fallback = '';
+                iconEl.src = fallback;
+                return;
+            }
+            iconEl.removeAttribute('src');
+        };
+    }
     if (linkEl) linkEl.href = `https://www.youtube.com/channel/${channel.id}`;
     if (subCountEl) subCountEl.textContent = '-';
     if (videoCountEl) videoCountEl.textContent = '-';
 }
 
-// API 데이터로 프로필 업데이트
-function renderChannelProfile(info) {
-    const nameEl = document.getElementById('channel-name');
-    const descEl = document.getElementById('channel-desc');
-    const iconEl = document.getElementById('channel-icon');
-    const linkEl = document.getElementById('channel-link');
-    const subCountEl = document.getElementById('sub-count');
-    const videoCountEl = document.getElementById('video-count');
-
-    // 로컬 채널 데이터로 아이콘 사용
-    const localChannel = getChannelById(info.id);
-    const icon = localChannel ? localChannel.icon : (info.photo || '');
-
-    if (nameEl) nameEl.textContent = info.name || (localChannel ? localChannel.name : '');
-    if (descEl) descEl.textContent = info.english_name || info.name || '';
-    if (iconEl) iconEl.src = icon;
-    if (linkEl) linkEl.href = `https://www.youtube.com/channel/${info.id}`;
-    if (subCountEl) subCountEl.textContent = formatSubscriberCount(info.subscriber_count);
-    if (videoCountEl) videoCountEl.textContent = info.video_count ? info.video_count.toLocaleString() : '-';
-}
-
-function formatSubscriberCount(count) {
-    if (count >= 1000000) {
-        return `${(count / 1000000).toFixed(1)}M`;
-    }
-    if (count >= 1000) {
-        return `${(count / 1000).toFixed(0)}K`;
-    }
-    return count.toString();
-}
-
-// === 자동 새로고침 ===
 function startAutoRefresh() {
     if (refreshInterval) clearInterval(refreshInterval);
 
     refreshInterval = setInterval(async () => {
-        // 탭 비활성 시 스킵
         if (document.hidden) return;
-        // 이미 실행 중이면 스킵
         if (isAutoRefreshInFlight) return;
-        // 라이브 폴링 중이면 스킵 (중복 방지)
-        if (isLivePollingInFlight) return;
-
         const state = getState();
         if (state.currentView === 'live') {
             isAutoRefreshInFlight = true;
@@ -2856,86 +3147,39 @@ function startAutoRefresh() {
                 isAutoRefreshInFlight = false;
             }
         }
-    }, 60000); // 1분마다
+    }, 60000); // 1遺꾨쭏??
 }
 
-// === 라이브 폴링 ===
-function startLivePolling() {
-    if (pollingInterval) clearInterval(pollingInterval);
-
-    // 2분마다 전체 채널 라이브 확인
-    pollingInterval = setInterval(async () => {
-        // 탭 비활성 시 스킵
-        if (document.hidden) return;
-        // 이미 실행 중이면 스킵
-        if (isLivePollingInFlight) return;
-
-        isLivePollingInFlight = true;
-        try {
-            const channelIds = CHANNELS.map(c => c.id).join(',');
-            const streams = await getLiveStreams(channelIds);
-
-            if (streams && streams.length > 0) {
-                streams.forEach(stream => {
-                    if (stream.status === 'live' && !knownStreamIds.has(stream.id)) {
-                        // 새 라이브 스트림 감지
-                        knownStreamIds.add(stream.id);
-
-                        const channelId = stream.channel ? stream.channel.id : null;
-                        const channel = CHANNELS.find(c => c.id === channelId);
-                        const icon = channel ? channel.icon : 'image/miko.jpg';
-
-                        showToast("🔴 LIVE NOW!", stream.title, icon);
-                    }
-                });
-            }
-        } finally {
-            isLivePollingInFlight = false;
-        }
-    }, 120000);
-}
-
-// === 탭 가시성 변경 핸들러 ===
 function setupVisibilityHandler() {
-    if (visibilityHandler) return; // 중복 방지
+    if (visibilityHandler) return; // 以묐났 諛⑹?
 
     visibilityHandler = () => {
         if (document.hidden) {
-            // 탭 비활성 시 인터벌 정리
             if (refreshInterval) {
                 clearInterval(refreshInterval);
                 refreshInterval = null;
             }
-            if (pollingInterval) {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
-            }
         } else {
-            // 탭 활성화 시 폴링 재시작
             startAutoRefresh();
-            startLivePolling();
         }
     };
 
     document.addEventListener('visibilitychange', visibilityHandler);
 }
 
-// === 메모리 누수 방지 ===
 window.addEventListener('beforeunload', () => {
     if (refreshInterval) clearInterval(refreshInterval);
     if (syncPollInterval) clearInterval(syncPollInterval);
-    if (pollingInterval) clearInterval(pollingInterval);
     if (visibilityHandler) {
         document.removeEventListener('visibilitychange', visibilityHandler);
         visibilityHandler = null;
     }
 });
 
-// === DOM Ready 시 초기화 ===
 document.addEventListener('DOMContentLoaded', () => {
     try {
         init();
     } catch (e) {
-        document.body.innerHTML += `<div style="color:red; padding:20px;">치명적 오류: ${e.message}</div>`;
+        document.body.innerHTML += `<div style="color:red; padding:20px;">치명적 오류: ${escapeHtml(e?.message || 'Unknown error')}</div>`;
     }
 });

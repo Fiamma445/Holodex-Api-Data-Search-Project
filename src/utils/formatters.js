@@ -5,29 +5,29 @@
 
 // 방송 토픽 ID → 한국어 라벨 매핑
 const TOPIC_MAP = {
-    'Original_Song': '🎵 오리지널 곡',
-    'Singing': '🎤 노래',
-    'Music': '🎵 음악',
-    'Gaming': '🎮 게임',
-    'Minecraft': '⛏️ 마인크래프트',
-    'Apex': '🎯 에이펙스',
-    'Valorant': '🔫 발로란트',
-    'Chatting': '💬 잡담',
-    'Talk': '💬 토크',
-    'Membersonly': '🔒 멤버십',
-    'Birthday': '🎂 생일',
-    'Anniversary': '🎉 기념일',
-    'Collab': '👥 콜라보',
-    'Drawing': '🎨 그림',
-    'ASMR': '🎧 ASMR',
-    'Karaoke': '🎤 노래방',
-    'Watchalong': '📺 동시시청',
-    'Superchat_Reading': '💰 슈퍼챗',
-    'Cooking': '🍳 요리',
-    'Handcam': '✋ 핸드캠',
-    'Graduation': '🎓 졸업',
-    '3D': '🎬 3D',
-    'New_Outfit': '👗 신의상'
+    'Original_Song': '오리지널 곡',
+    'Singing': '노래',
+    'Music': '음악',
+    'Gaming': '게임',
+    'Minecraft': '마인크래프트',
+    'Apex': '에이펙스',
+    'Valorant': '발로란트',
+    'Chatting': '잡담',
+    'Talk': '토크',
+    'Membersonly': '멤버십',
+    'Birthday': '생일',
+    'Anniversary': '기념일',
+    'Collab': '콜라보',
+    'Drawing': '그림',
+    'ASMR': 'ASMR',
+    'Karaoke': '노래방',
+    'Watchalong': '동시시청',
+    'Superchat_Reading': '슈퍼챗',
+    'Cooking': '요리',
+    'Handcam': '핸드캠',
+    'Graduation': '졸업',
+    '3D': '3D',
+    'New_Outfit': '신의상'
 };
 
 /**
@@ -36,7 +36,7 @@ const TOPIC_MAP = {
  * @returns {string} 한국어 라벨
  */
 export function formatTopicId(topicId) {
-    return TOPIC_MAP[topicId] || `🏷️ ${topicId.replace(/_/g, ' ')}`;
+    return TOPIC_MAP[topicId] || topicId.replace(/_/g, ' ');
 }
 
 /**

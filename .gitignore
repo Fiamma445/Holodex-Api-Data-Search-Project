@@ -9,9 +9,17 @@ __pycache__/
 
 # 데이터베이스 (용량 큼)
 *.db
+*.db.gz
+*.sqlite
+*.sqlite3
+channel-icons/
+public/channel-icons/
+/channel-index.json
 
 # 환경 변수
 .env
+.env.*
+!.env.example
 
 # 백업 폴더
 backup_*/
@@ -21,6 +29,11 @@ backup_*/
 
 # 임시 비교/디버그 파일
 .tmp*
+.seed_sync_progress.json
+*.log
+output/*.log
+output/
+design-mockups/
 
 # 개인 문서 (포트폴리오, 태블로)
 PORTFOLIO_LAFTEL_DATA_ANALYST.md
@@ -50,8 +63,3 @@ channels2.json
 # 불필요 유틸리티
 member_photos.js
 start_server_python.bat
-
-data/
-*.csv
-*.db
-*.json

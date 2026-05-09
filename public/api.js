@@ -1,5 +1,3 @@
-console.log("🚀 api.js loaded!");
-
 // Use local proxy path
 const API_BASE_URL = '/api/v2';
 const LOCAL_API_URL = '/api';
@@ -15,8 +13,22 @@ function getClipCacheKey(channelId, offset, searchQuery, lang) {
     const normalizedChannelId = channelId || '';
     const normalizedOffset = Number.isFinite(offset) ? offset : 0;
     const normalizedQuery = (searchQuery || '').trim();
-    const normalizedLang = lang || 'all';
+    const normalizedLang = normalizeClipLangs(lang).join(',');
     return `${normalizedChannelId}:${normalizedOffset}:${normalizedQuery}:${normalizedLang}`;
+}
+
+function normalizeClipLangs(value) {
+    const values = Array.isArray(value) ? value : [value];
+    const langs = values
+        .filter(item => typeof item === 'string')
+        .map(item => item.trim())
+        .filter(item => ['ja', 'ko', 'en', 'zh'].includes(item))
+        .filter((item, index, array) => array.indexOf(item) === index);
+    return langs.length > 0 ? langs : ['ja'];
+}
+
+function buildClipLangParam(value) {
+    return normalizeClipLangs(value).join(',');
 }
 
 // 캐시에서 가져오기
@@ -63,20 +75,35 @@ function pruneClipCache() {
     }
 }
 
+function buildHolodexHeaders(options = {}) {
+    const headers = {};
+    if (options.useUserApiKey) {
+        const apiKey = localStorage.getItem('holodex_api_key');
+        if (apiKey) {
+            headers['X-APIKEY'] = apiKey;
+        }
+    }
+    return headers;
+}
+
+function hasUserApiKey() {
+    return Boolean(localStorage.getItem('holodex_api_key'));
+}
+
 // Helper to fetch data from the API (GET)
-async function fetchFromApi(endpoint, params = {}) {
+async function fetchFromApi(endpoint, params = {}, options = {}) {
     const url = new URL(API_BASE_URL + endpoint, window.location.origin);
     Object.keys(params).forEach(key => {
         const value = params[key];
         if (value === undefined || value === null) return;
+        if (Array.isArray(value)) {
+            value.forEach(item => url.searchParams.append(key, item));
+            return;
+        }
         url.searchParams.append(key, value);
     });
 
-    const apiKey = localStorage.getItem('holodex_api_key');
-    const headers = {};
-    if (apiKey) {
-        headers['X-APIKEY'] = apiKey;
-    }
+    const headers = buildHolodexHeaders(options);
 
     try {
         const response = await fetch(url, { headers });
@@ -146,45 +173,6 @@ async function searchLocalDb(query, channelId, offset = 0, collab = '', collabMo
     }
 }
 
-// Trigger Sync
-async function triggerSync() {
-    const apiKey = localStorage.getItem('holodex_api_key');
-    if (!apiKey) return;
-
-    try {
-        await fetch(LOCAL_API_URL + '/sync', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ apiKey })
-        });
-        console.log("🔄 Sync triggered");
-    } catch (e) {
-        console.error("Failed to trigger sync", e);
-    }
-}
-
-// Call sync on load
-// Call sync on load - DISABLED
-// triggerSync();
-
-/**
- * Get Channel Information (Single)
- */
-async function getChannelInfo(channelId) {
-    return await fetchFromApi(`/channels/${channelId}`);
-}
-
-/**
- * Get Channel Information (Batch)
- * Uses /users endpoint to fetch multiple channels at once
- */
-async function getChannelsInfo(channelIds) {
-    const ids = Array.isArray(channelIds) ? channelIds.join(',') : channelIds;
-    return await fetchFromApi('/users', {
-        id: ids
-    });
-}
-
 /**
  * Get Live and Upcoming Streams (Batch Optimized)
  */
@@ -248,47 +236,75 @@ async function getSyncStatus() {
 
 /**
  * Get Recent Videos - Uses SQLite DB for Search (필터 지원: 콜라보, 날짜, 년/월, 비디오 타입)
- * @param {string} videoType - 'all' 또는 'music' (선택, 기본값: 'all')
+ * @param {string} videoType - 'all', 'collab' 또는 'music' (선택, 기본값: 'all')
  */
 async function getRecentVideos(channelId, offset = 0, searchQuery = '', channelName = '', collab = '', collabMode = 'or', hideUnarchived = false, filterDates = [], filterYears = null, filterMonths = null, videoType = 'all') {
     return await searchLocalDb(searchQuery, channelId, offset, collab, collabMode, hideUnarchived, filterDates, filterYears, filterMonths, videoType);
 }
 
 /**
- * Get Recent Videos DIRECTLY from API (Bypassing DB)
- * @param {string} channelId - 채널 ID
- * @param {number} offset - 오프셋
- * @param {string} mentionedChannelId - 콜라보 멤버 ID (필터용)
+ * Get Songs - Uses local Holodex songs DB
  */
-async function getRecentVideosFromApi(channelId, offset = 0, mentionedChannelId = '') {
-    const params = {
-        channel_id: channelId,
-        status: 'past,missing',
-        type: 'stream',
-        limit: 32,
-        offset: offset,
-        paginated: '1',
-        include: 'mentions'  // 콜라보 멤버 정보 포함
-    };
-
-    // 콜라보 멤버 필터
-    if (mentionedChannelId) {
-        params.mentioned_channel_id = mentionedChannelId;
+async function getSongs(channelId, offset = 0, searchQuery = '', sort = 'recent', category = 'all', collab = '', collabMode = 'or') {
+    const url = new URL(LOCAL_API_URL + '/songs', window.location.origin);
+    url.searchParams.append('channel_id', channelId);
+    url.searchParams.append('offset', offset);
+    url.searchParams.append('limit', 32);
+    url.searchParams.append('sort', sort);
+    url.searchParams.append('category', category);
+    if (searchQuery) {
+        url.searchParams.append('q', searchQuery);
+    }
+    if (collab) {
+        const collabStr = Array.isArray(collab) ? collab.join(',') : collab;
+        if (collabStr) {
+            url.searchParams.append('collab', collabStr);
+            url.searchParams.append('collab_mode', collabMode);
+        }
     }
 
-    return await fetchFromApi('/v2/videos', params);
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return { items: [], total: 0, summary: {} };
+        return await response.json();
+    } catch {
+        return { items: [], total: 0, summary: {} };
+    }
+}
+
+/**
+ * Get song detail list - Uses local DB only
+ */
+async function getSongDetails(song, offset = 0, limit = 300) {
+    const url = new URL(LOCAL_API_URL + '/song-details', window.location.origin);
+    url.searchParams.append('offset', offset);
+    url.searchParams.append('limit', limit);
+    if (song?.song_title) {
+        url.searchParams.append('title', song.song_title);
+    }
+    if (song?.original_artist) {
+        url.searchParams.append('artist', song.original_artist);
+    }
+    if (song?.itunesid) {
+        url.searchParams.append('itunesid', song.itunesid);
+    }
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) return { items: [], total: 0 };
+        return await response.json();
+    } catch {
+        return { items: [], total: 0 };
+    }
 }
 
 // Helper to send data to the API (POST)
-async function postToApi(endpoint, body = {}) {
+async function postToApi(endpoint, body = {}, options = {}) {
     const url = new URL(API_BASE_URL + endpoint, window.location.origin);
-    const apiKey = localStorage.getItem('holodex_api_key');
     const headers = {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        ...buildHolodexHeaders(options)
     };
-    if (apiKey) {
-        headers['X-APIKEY'] = apiKey;
-    }
 
     try {
         const response = await fetch(url, {
@@ -312,14 +328,15 @@ async function postToApi(endpoint, body = {}) {
  * @param {number} offset - 오프셋
  * @param {string} searchQuery - 검색어
  * @param {string} channelName - 채널 이름
- * @param {string} lang - 언어 필터 (all, ja, ko, en, zh)
+ * @param {string|string[]} lang - 언어 필터 (ja, ko, en, zh)
  */
-async function getClips(channelId, offset = 0, searchQuery = '', channelName = '', lang = 'all') {
+async function getClips(channelId, offset = 0, searchQuery = '', channelName = '', lang = ['ja']) {
+    const langs = normalizeClipLangs(lang);
+    const langParam = buildClipLangParam(langs);
     // 캐시 키 생성 및 캐시 확인
-    const cacheKey = getClipCacheKey(channelId, offset, searchQuery, lang);
+    const cacheKey = getClipCacheKey(channelId, offset, searchQuery, langs);
     const cached = getFromClipCache(cacheKey);
     if (cached) {
-        console.log('⚡ Clip cache hit:', cacheKey);
         return cached;
     }
 
@@ -339,12 +356,9 @@ async function getClips(channelId, offset = 0, searchQuery = '', channelName = '
             limit: 32
         };
 
-        // 언어 필터 추가 (all이 아닐 때만)
-        if (lang && lang !== 'all') {
-            body.lang = [lang];
-        }
+        body.lang = langs;
 
-        const apiResult = await postToApi('/search/videoSearch', body);
+        const apiResult = await postToApi('/search/videoSearch', body, { useUserApiKey: true });
 
         if (!apiResult) {
             return { items: [], total: 0 };
@@ -366,12 +380,9 @@ async function getClips(channelId, offset = 0, searchQuery = '', channelName = '
             paginated: '1'
         };
 
-        // 언어 필터 추가 (all이 아닐 때만)
-        if (lang && lang !== 'all') {
-            params.lang = lang;
-        }
+        params.lang = langParam;
 
-        const clipResult = await fetchFromApi('/videos', params);
+        const clipResult = await fetchFromApi('/videos', params, { useUserApiKey: true });
 
         if (!clipResult) {
             return { items: [], total: 0 };
@@ -394,6 +405,87 @@ const ALLOWED_INDIE_IDS = [
     'UCrV1Hf5r8P148idjoSfrGEQ', // 유우키 사쿠나
     'UCLIpj4TmXviSTNE_U5WG_Ug'  // 쿠라게우 로아
 ];
+
+const ALLOWED_CHANNEL_IDS = Object.freeze([
+    'UCp6993wxpyDPHUpavwDFqgg',
+    'UCDqI2jOz0weumE8s7paEk6g',
+    'UC-hM6YJuNYVAmUWxeIr9FeA',
+    'UC5CwaMl1eIgY8h02uZw7u8A',
+    'UC0TXe_LYZ4scaW2XMyi5_kw',
+    'UCdn5BQ06XqgXoAxIhbqw5Rg',
+    'UCQ0UDLQCjY0rmuxCDE38FGg',
+    'UCFTLzh12_nrtzqBPsTCqenA',
+    'UC1CfXB_kRs3C_zaeTG3oGyg',
+    'UC1opHUrw8rvnsadT_iGp7Cg',
+    'UCXTpFs_3PqI41qX2d9tL2Rw',
+    'UC7fk0CB07ly8oSl0aqKkqFg',
+    'UC1suqwovbL1kzsoaZgFZLKg',
+    'UCvzGlP9oQwU__Y0r9id_jnA',
+    'UCp_5t9SrOQwXMU7iIjQfARg',
+    'UCvaTdHTWBGv3MKj3KVqJVCw',
+    'UChAnqc_AY5_I3Px5dig3X1Q',
+    'UC1DCedRgGHBdm81E1llLhOQ',
+    'UCvInZx9h3jC2JzsIzoOebWg',
+    'UCdyqAaZDKHXg4Ahi7VENThQ',
+    'UCCzUftO8KOVkV4wQG1vkUvg',
+    'UCZlDXzGoo7d44bwdNObFacg',
+    'UCqm3BQLlJfvkTsX_hvm0UmA',
+    'UC1uv2Oq6kNxgATlCiez59hw',
+    'UCa9Y57gfeY0Zro_noHRVrnw',
+    'UCS9uQI_jC3DE0L4IpXyvr6w',
+    'UCFKOVgVbGmX65RxO3EtH3iw',
+    'UCAWSyEs_Io8MtpY3m_zqILA',
+    'UCUKD_uaobj9jiqB_VXt71mA',
+    'UCK9V2B22uJYu3N7eR_BT9QA',
+    'UCENwRMx5Yh42zWpzURebzTw',
+    'UC6eWCld0KwmyHFbAqK3V_Rw',
+    'UCs9_O1tRPMQTHQ_N_L6FU2g',
+    'UCIBY1ollUsauvVi4hW4cumw',
+    'UC_vMYWcDjmfdpH6r4TTn1MQ',
+    'UCWQtYtq9EOB4_I5P_3fh8lA',
+    'UCtyWhCj3AqKh2dXctLkDtng',
+    'UCdXAk5MpyLD8594lm_OvtGQ',
+    'UC1iA6_NT4mtAcIII6ygrvCw',
+    'UCMGfV7TVTmHhEErVJg1oHBQ',
+    'UC9LSiN9hXI55svYEBrrK_tw',
+    'UCuI_opAVX6qbxZY_a_AxFuQ',
+    'UCjk2nKmHzgH5Xy_C5qYRd5A',
+    'UCKMWFR6lAstLa7Vbf5dH7ig',
+    'UCGzTVXqMQHa4AgJVJIVvtDQ',
+    'UCL_qhgtOy0dy1Agp8vkySQg',
+    'UCHsx4Hqa_1ORjQTh9TYDhww',
+    'UCMwGHR0BTZuLsmjY_NT5Pwg',
+    'UCoSrY_IQQVpmIRZ9Xf_y93g',
+    'UCyl1z3jo3XHR1riLFKG5UAg',
+    'UC8rcEBzJSleTkf__agPM20g',
+    'UCO_aKKYxn4tvrqPjcTzZ6EQ',
+    'UCmbs8T6MWqUHP1tIQvSgKrg',
+    'UC3n5uGu18FoCy23ggWWp8tA',
+    'UCgmPnx_EEeOrZSg5Tiw7ZRQ',
+    'UCgnfPPb9JI3e9A4cXHnWbyg',
+    'UC9p_lqQ0FEDz327Vgf5JwqA',
+    'UC_sFNM0z0MWm9A6WlKPuMMg',
+    'UCt9H_RpQzhxzlyBxFqrdHqA',
+    'UCW5uhrG1eCBYditmhL0Ykjw',
+    'UCl69AEx4MdqMZH7Jtsm7Tig',
+    'UCDHABijvPBnJm7F_KlNME3w',
+    'UCvN5h1ShZtc7nly3pezRayg',
+    'UCOyYb1c43VlX9rc_lT6NKQw',
+    'UCP0BspO_AMEe3aQqqpo89Dg',
+    'UCAoy6rzhSf4ydcYjJw3WoVg',
+    'UCYz_5n_uDuChHtLo7My1HnQ',
+    'UC727SQYUvx5pDDGQpTICNWg',
+    'UChgTyjG_pdNvxxhdsXfHQ5Q',
+    'UCTvHWSfBZgtxE4sILOaurIQ',
+    'UCZLZ8Jjx_RN2CXloOmgTHVg',
+    'UCjLEmnpCNeisMxy134KPwWw',
+    'UCl_gCybOJRIgOXw6Qb4qJzQ',
+    'UCD8HOxPs4Xvsm8H0ZxXGiBw',
+    'UCrV1Hf5r8P148idjoSfrGEQ',
+    'UCLIpj4TmXviSTNE_U5WG_Ug',
+    'UCt30jJgChL8qeT9VPadidSw',
+    'UClS3cnIUM9yzsBPQzeyX_8Q'
+]);
 
 // 한글 → 영문 전체 이름 매핑 (검색용, 성+이름 조합 포함)
 const FULL_NAME_MAP = {
@@ -635,6 +727,31 @@ Object.entries(FULL_NAME_MAP).forEach(([kr, en]) => {
 EN_TO_KR_NAME_MAP['IRyS'] = 'IRyS';
 EN_TO_KR_NAME_MAP['Hakos Baelz'] = '하코스 벨즈';
 
+const ALLOWED_CHANNEL_ID_SET = new Set(ALLOWED_CHANNEL_IDS.map(normalizeChannelId));
+const ALLOWED_INDIE_ID_SET = new Set(ALLOWED_INDIE_IDS.map(normalizeChannelId));
+const SEARCH_NAME_MODULE_VERSION = '20260509-2';
+
+function normalizeChannelId(value) {
+    return String(value || '').replaceAll('-', '_');
+}
+
+function isAllowedSearchChannel(channel) {
+    if (!channel?.id) return false;
+
+    const channelId = normalizeChannelId(channel.id);
+    return ALLOWED_CHANNEL_ID_SET.has(channelId) || ALLOWED_INDIE_ID_SET.has(channelId);
+}
+
+function mergeChannelIndexes(serverItems, staticItems) {
+    const merged = new Map();
+    [...serverItems, ...staticItems]
+        .filter(isAllowedSearchChannel)
+        .forEach(channel => {
+            merged.set(normalizeChannelId(channel.id), channel);
+        });
+    return [...merged.values()];
+}
+
 // 한글 여부 판단 함수
 function containsKorean(str) {
     return /[ㄱ-ㅎ|가-힣]/.test(str);
@@ -667,183 +784,149 @@ function calculateMatchScore(name, query) {
  * @param {string} query - 검색어
  * @returns {Promise<Array>} - 필터링된 채널 목록
  */
-async function searchChannels(query) {
-    console.log('🔍 searchChannels called with:', query);
+let localChannelIndexCache = null;
+let localizedSearchNamesCache = null;
 
-    if (!query || query.trim().length < 2) {
-        console.log('❌ Query too short');
-        return [];
+async function fetchServerChannelIndex() {
+    try {
+        const response = await fetch('/api/channel-index', { cache: 'no-store' });
+        if (response.ok) {
+            const data = await response.json();
+            return Array.isArray(data.items) ? data.items : [];
+        }
+    } catch (error) {
     }
+
+    return [];
+}
+
+async function fetchStaticChannelIndex() {
+    try {
+        const response = await fetch('/channel-index.json', { cache: 'force-cache' });
+        const data = response.ok ? await response.json() : [];
+        return Array.isArray(data) ? data : [];
+    } catch (error) {
+    }
+
+    return [];
+}
+
+async function getLocalChannelIndex() {
+    if (localChannelIndexCache) return localChannelIndexCache;
+
+    const [serverItems, staticItems] = await Promise.all([
+        fetchServerChannelIndex(),
+        fetchStaticChannelIndex()
+    ]);
+
+    localChannelIndexCache = mergeChannelIndexes(serverItems, staticItems);
+    return localChannelIndexCache;
+}
+
+async function getLocalizedSearchNames() {
+    if (localizedSearchNamesCache) return localizedSearchNamesCache;
 
     try {
-        // Holodex API - Hololive 채널 전체 가져오기 (페이지네이션)
-        console.log('📡 Fetching from /channels...');
-
-        let allChannels = [];
-        let offset = 0;
-        const limit = 100;
-
-        // 최대 3페이지 (300개)까지 가져오기
-        for (let page = 0; page < 3; page++) {
-            const result = await fetchFromApi('/channels', {
-                type: 'vtuber',
-                org: 'Hololive',
-                limit: limit,
-                offset: offset
-            });
-
-            if (!result || !Array.isArray(result) || result.length === 0) {
-                break;
-            }
-
-            allChannels = [...allChannels, ...result];
-            offset += limit;
-
-            // 100개 미만이면 더 이상 없음
-            if (result.length < limit) {
-                break;
-            }
-        }
-
-        console.log('📦 API result:', allChannels.length, 'total channels');
-
-        if (allChannels.length === 0) {
-            console.log('❌ No valid result from API');
-            return [];
-        }
-
-        console.log('✅ Got', allChannels.length, 'channels from API');
-
-        // === 허용된 개인세 목록 (Holodex에 없거나 org가 다른 채널들) ===
-        const ALLOWED_INDIE_CHANNELS = [
-            { id: 'UCrV1Hf5r8P148idjoSfrGEQ', name: '유우키 사쿠나', english_name: 'Yuuki Sakuna', photo: 'https://yt3.ggpht.com/CAO0J4GC4_G8VxiyulWcZZ3b44l27EFl-vSOER7ucwAL5IJIRxVk4XSQdhWn3PLXD-rQ-QVj=s800-c-k-c0x00ffffff-no-rj', org: 'Indie' },
-            { id: 'UCLIpj4TmXviSTNE_U5WG_Ug', name: '쿠라게우 로아', english_name: 'Kurageu Roa', photo: 'https://yt3.ggpht.com/YF6d4zXLWFR6VjPpF01N8w0Wq-MfwMz6MZTDQbOF2TeSSMT4bwtIf2xGs8DfoufreyVcro4N7Bo=s800-c-k-c0x00ffffff-no-rj', org: 'Indie' },
-            { id: 'UCt30jJgChL8qeT9VPadidSw', name: '시구레 우이', english_name: 'Shigure Ui', photo: 'https://yt3.ggpht.com/ytc/AIdro_m6xQ9ez0I8lnwswHqAns9ZRPsaCCutfzu6eUbM7pwzqsA=s800-c-k-c0x00ffffff-no-rj', org: 'Indie' },
-            { id: 'UClS3cnIUM9yzsBPQzeyX_8Q', name: '아마가이 루카', english_name: 'Amagai Ruka', photo: 'https://yt3.ggpht.com/E_GIFETWLQYVBMYBzSfwr6VqmJRALcKYvruQcC5jyI9KqRszN9YaPWlT-C3PobxtTUplYNvrCg=s800-c-k-c0x00ffffff-no-rj', org: 'Indie' }
-        ];
-
-        // 개인세 목록을 allChannels에 추가
-        allChannels = [...allChannels, ...ALLOWED_INDIE_CHANNELS];
-
-        // 홀로스타즈 제외 (suborg 또는 group에 HOLOSTARS 포함 시 제외)
-        // + 계약해지 멤버 제외 (루시아, 멜)
-        const EXCLUDED_CHANNEL_IDS = [
-            'UCl_gCybOJRIgOXw6Qb4qJzQ', // Uruha Rushia
-            'UCD8HOxPs4Xvsm8H0ZxXGiBw', // Yozora Mel
-        ];
-
-        const filteredByOrg = allChannels.filter(ch => {
-            // 계약해지 멤버 제외
-            if (EXCLUDED_CHANNEL_IDS.includes(ch.id)) {
-                return false;
-            }
-
-            const suborg = (ch.suborg || '').toUpperCase();
-            const group = (ch.group || '').toUpperCase();
-            // 홀로스타즈 계열은 제외
-            if (suborg.includes('HOLOSTARS') || group.includes('HOLOSTARS')) {
-                return false;
-            }
-            // 홀로라이브 또는 개인세(Indie) 허용
-            return ch.org === 'Hololive' || ch.org === 'Indie';
-        });
-
-        console.log('🚫 Filtered (Holostars removed):', filteredByOrg.length, 'channels');
-
-        // === 새 검색 로직: 한글/영어 감지 + 정확도 스코어링 ===
-        const isKorean = containsKorean(query);
-        const queryLower = query.toLowerCase();
-        console.log(`🔤 Query type: ${isKorean ? 'Korean' : 'English'}`);
-
-        // 결과 + 스코어 배열
-        const scoredResults = [];
-
-        // FULL_NAME_MAP 정확 매칭 확인 (한글 입력 시 우선)
-        const exactMappedName = FULL_NAME_MAP[query];
-        if (exactMappedName) {
-            console.log('✨ Exact map match:', query, '→', exactMappedName);
-        }
-
-        for (const ch of filteredByOrg) {
-            const englishName = ch.english_name || ch.name || '';
-            const originalName = ch.name || '';  // 일본어 이름
-
-            // 한글 이름 찾기 (역매핑)
-            const koreanName = EN_TO_KR_NAME_MAP[englishName] || '';
-
-            let score = 0;
-
-            if (isKorean) {
-                // === 한글 검색 로직 ===
-
-                // 1. FULL_NAME_MAP 정확 매칭 시 최고점
-                if (exactMappedName && englishName.toLowerCase() === exactMappedName.toLowerCase()) {
-                    score = 100;
-                }
-                // 2. 한글 이름(역매핑)에서 검색
-                else if (koreanName) {
-                    score = calculateMatchScore(koreanName, query);
-                }
-                // 3. FULL_NAME_MAP의 모든 한글 키에서 부분 매칭 검색
-                if (score === 0) {
-                    for (const [krName, enName] of Object.entries(FULL_NAME_MAP)) {
-                        if (krName.includes(query) && enName.toLowerCase() === englishName.toLowerCase()) {
-                            // 부분 매칭 발견
-                            score = Math.max(score, calculateMatchScore(krName, query));
-                            break;
-                        }
-                    }
-                }
-            } else {
-                // === 영어 검색 로직 ===
-                // 영어 이름에서 직접 검색
-                const englishScore = calculateMatchScore(englishName, query);
-                const originalScore = calculateMatchScore(originalName, query);
-                score = Math.max(englishScore, originalScore);
-            }
-
-            // 스코어가 있으면 결과에 추가
-            if (score > 0) {
-                scoredResults.push({ channel: ch, score, koreanName, englishName });
-            }
-        }
-
-        // 스코어 내림차순 정렬
-        scoredResults.sort((a, b) => b.score - a.score);
-
-        console.log(`🎯 Found ${scoredResults.length} matches (sorted by score)`);
-        if (scoredResults.length > 0) {
-            console.log('📊 Top results:', scoredResults.slice(0, 5).map(r =>
-                `${r.koreanName || r.englishName} (${r.score}점)`
-            ));
-        }
-
-        // 결과 정규화
-        return scoredResults.map(({ channel: ch, koreanName, englishName }) => {
-            return {
-                id: ch.id,
-                name: koreanName || englishName,  // 한글 이름 우선
-                englishName: englishName,
-                originalName: ch.name,
-                icon: ch.photo || null,
-                org: ch.org,
-                emoji: '',
-                theme: {
-                    primary: '#6366f1',
-                    secondary: '#e0e7ff',
-                    accent: '#4f46e5'
-                }
-            };
-        });
-    } catch (error) {
-        console.error('❌ Channel search failed:', error);
-        return [];
+        const module = await import(`./src/data/localizedNames.js?v=${SEARCH_NAME_MODULE_VERSION}`);
+        localizedSearchNamesCache = new Map(
+            Object.entries(module.TALENT_NAMES || {}).map(([id, names]) => {
+                const aliases = Object.values(names).filter(Boolean);
+                return [normalizeChannelId(id), aliases];
+            })
+        );
+    } catch {
+        localizedSearchNamesCache = new Map();
     }
+
+    return localizedSearchNamesCache;
+}
+
+function uniqueSearchAliases(values) {
+    return [...new Set(values.filter(Boolean).map(value => String(value).trim()).filter(Boolean))];
+}
+
+function getChannelSearchAliases(channel, koreanName, localizedNames) {
+    const channelId = normalizeChannelId(channel.id);
+    const localizedAliases = localizedNames.get(channelId) || [];
+    return uniqueSearchAliases([
+        channel.englishName,
+        channel.name,
+        channel.originalName,
+        koreanName,
+        ...localizedAliases
+    ]);
+}
+
+function scoreLocalChannel(channel, query, exactMappedName, localizedNames) {
+    const englishName = channel.englishName || channel.name || '';
+    const koreanName = EN_TO_KR_NAME_MAP[englishName] || '';
+
+    if (exactMappedName && englishName.toLowerCase() === exactMappedName.toLowerCase()) {
+        return { score: 100, koreanName, englishName };
+    }
+
+    const aliases = getChannelSearchAliases(channel, koreanName, localizedNames);
+    let score = Math.max(...aliases.map(alias => calculateMatchScore(alias, query)), 0);
+
+    if (score === 0) {
+        for (const [krName, enName] of Object.entries(FULL_NAME_MAP)) {
+            if (krName.includes(query) && enName.toLowerCase() === englishName.toLowerCase()) {
+                score = Math.max(score, calculateMatchScore(krName, query));
+                break;
+            }
+        }
+    }
+
+    return { score, koreanName, englishName };
+}
+
+function normalizeLocalChannelResult(channel, koreanName, englishName) {
+    return {
+        id: channel.id,
+        name: koreanName || channel.name || englishName,
+        englishName,
+        originalName: channel.name,
+        icon: channel.icon || `/channel-icons/${encodeURIComponent(channel.id)}.png`,
+        org: channel.org || 'Hololive',
+        emoji: '',
+        theme: {
+            primary: '#6366f1',
+            secondary: '#e0e7ff',
+            accent: '#4f46e5'
+        }
+    };
+}
+
+async function searchLocalChannelIndex(query) {
+    if (!query || query.trim().length < 2) return [];
+
+    const trimmedQuery = query.trim();
+    const exactMappedName = FULL_NAME_MAP[trimmedQuery];
+    const [channels, localizedNames] = await Promise.all([
+        getLocalChannelIndex(),
+        getLocalizedSearchNames()
+    ]);
+
+    return channels
+        .map(channel => {
+            const result = scoreLocalChannel(channel, trimmedQuery, exactMappedName, localizedNames);
+            return { channel, ...result };
+        })
+        .filter(result => result.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .map(({ channel, koreanName, englishName }) =>
+            normalizeLocalChannelResult(channel, koreanName, englishName)
+        );
+}
+
+async function searchChannels(query) {
+    return searchLocalChannelIndex(query);
 }
 
 // 전역 노출 (app.js에서 사용)
+window.getChannelIndex = getLocalChannelIndex;
 window.searchChannels = searchChannels;
-window.getChannelsInfo = getChannelsInfo;
+window.getSongDetails = getSongDetails;
 
 // === 통계 API 함수 ===
 async function getYearlyStats(channelId) {

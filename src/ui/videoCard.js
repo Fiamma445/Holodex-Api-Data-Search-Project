@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 비디오 카드 컴포넌트
  * @description 비디오 썸네일 카드 생성
  */
@@ -11,7 +11,8 @@ import {
     formatNumber,
     formatRelativeTime,
     formatScheduledTime
-} from '../utils/formatters.js';
+} from '../utils/formatters.js?v=20260510-1';
+import { getMemberPhotoUrl, getRemoteMemberPhotoUrl } from '../data/memberPhotos.js?v=20260510-1';
 
 const failedThumbnailIds = new Set();
 
@@ -19,29 +20,46 @@ function getPrimaryThumbnailUrl(videoId) {
     return `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`;
 }
 
-function getFallbackThumbnailUrl(videoId) {
-    return `https://i.ytimg.com/vi/${videoId}/default.jpg`;
-}
-
 function getThumbnailUrl(videoId) {
-    return failedThumbnailIds.has(videoId)
-        ? getFallbackThumbnailUrl(videoId)
-        : getPrimaryThumbnailUrl(videoId);
+    return failedThumbnailIds.has(videoId) ? '' : getPrimaryThumbnailUrl(videoId);
 }
 
-function attachThumbnailFallback(card) {
+function shouldHideThumbnail(video) {
+    return video.title?.trim() === '配信スケジュール';
+}
+
+function removeBrokenThumbnail(card) {
     const img = card.querySelector('img[data-video-id]');
     if (!img) return;
 
-    img.addEventListener('error', () => {
+    const removeThumbnail = () => {
         const videoId = img.dataset.videoId;
-        if (!videoId) return;
+        if (videoId) {
+            failedThumbnailIds.add(videoId);
+        }
+        img.remove();
+    };
 
-        const fallback = getFallbackThumbnailUrl(videoId);
-        if (img.src === fallback) return;
+    img.addEventListener('error', () => {
+        removeThumbnail();
+    });
 
-        failedThumbnailIds.add(videoId);
-        img.src = fallback;
+    if (img.complete && img.naturalWidth === 0) {
+        removeThumbnail();
+    }
+}
+
+function removeBrokenCollabIcons(card) {
+    card.querySelectorAll('.collab-icon img').forEach(img => {
+        img.addEventListener('error', () => {
+            const fallback = img.dataset.fallback || '';
+            if (fallback && img.src !== new URL(fallback, window.location.origin).href) {
+                img.dataset.fallback = '';
+                img.src = fallback;
+                return;
+            }
+            img.closest('.collab-icon')?.remove();
+        });
     });
 }
 
@@ -51,7 +69,7 @@ function attachThumbnailFallback(card) {
  * @param {number} index - 카드 인덱스 (첫 줄 판단용)
  * @returns {HTMLElement} 비디오 카드 요소
  */
-export function createVideoCard(video, index = 0) {
+export function createVideoCard(video, index = 0, options = {}) {
     const card = document.createElement('a');
     card.href = `https://www.youtube.com/watch?v=${video.id}`;
     // 첫 줄(0~3번 인덱스)에는 first-row 클래스 추가
@@ -77,7 +95,7 @@ export function createVideoCard(video, index = 0) {
 
     // 카운트다운 (예정 방송)
     const countdownInfo = (video.status === 'upcoming' && video.start_scheduled)
-        ? `<div class="countdown-info">🕐 ${formatCountdown(video.start_scheduled)}</div>`
+        ? `<div class="countdown-info">${formatCountdown(video.start_scheduled)}</div>`
         : '';
 
     const timeLabel = video.status === 'upcoming' ? '예정' : '방송';
@@ -87,14 +105,18 @@ export function createVideoCard(video, index = 0) {
         : formatRelativeTime(video.start_scheduled || video.available_at);
     // Holodex 스타일 절대 날짜/시간 (예: 2026.01.31. 오후 12:00)
     const scheduledTime = formatScheduledTime(video.start_scheduled || video.available_at);
-    const thumbnailUrl = getThumbnailUrl(video.id);
+    const thumbnailUrl = shouldHideThumbnail(video) ? '' : getThumbnailUrl(video.id);
+    const hostChannelName = getHostChannelName(video, options);
+    const hostChannel = hostChannelName
+        ? `<span class="video-host-channel" title="${escapeHtml(hostChannelName)}">${escapeHtml(hostChannelName)}</span>`
+        : '';
 
     // 콜라보 멤버 아이콘 (호버 시 표시)
     const collabMembers = createCollabMembers(video.mentions);
 
     card.innerHTML = `
         <div class="thumbnail-wrapper">
-            <img src="${thumbnailUrl}" alt="${escapeHtml(video.title)}" loading="lazy" decoding="async" data-video-id="${video.id}">
+            ${thumbnailUrl ? `<img src="${thumbnailUrl}" alt="${escapeHtml(video.title)}" loading="lazy" decoding="async" data-video-id="${video.id}" onerror="this.remove()">` : ''}
             ${statusBadge}
             ${durationBadge}
             ${collabMembers}
@@ -106,12 +128,14 @@ export function createVideoCard(video, index = 0) {
             ${countdownInfo}
             <div class="video-meta">
                 <span class="scheduled-date">${scheduledTime}</span>
-                <span class="relative-time">(${video.status === 'live' ? '🔴 ' : ''}${relativeTime})</span>
+                ${hostChannel}
+                <span class="relative-time">(${relativeTime})</span>
             </div>
         </div>
     `;
 
-    attachThumbnailFallback(card);
+    removeBrokenThumbnail(card);
+    removeBrokenCollabIcons(card);
 
     return card;
 }
@@ -121,12 +145,50 @@ export function createVideoCard(video, index = 0) {
  * @param {string} status - 비디오 상태
  * @returns {string} HTML 문자열
  */
+function normalizeChannelId(value) {
+    return String(value || '').replaceAll('-', '_');
+}
+
+function getVideoHostChannel(video) {
+    const channel = video.channel || {};
+    return {
+        id: channel.id || video.channel_id || video.channelId || '',
+        name: channel.name || video.channel_name || video.channelName || '',
+        english_name: channel.english_name || video.channel_english_name || video.channelEnglishName || '',
+        englishName: channel.englishName || channel.english_name || video.channelEnglishName || ''
+    };
+}
+
+function shouldShowHostChannel(hostChannel, options) {
+    if (!hostChannel.id && !hostChannel.name && !hostChannel.english_name && !hostChannel.englishName) {
+        return false;
+    }
+    if (options.showHostChannel) return true;
+
+    const currentChannelId = options.currentChannelId || '';
+    return Boolean(
+        currentChannelId
+        && hostChannel.id
+        && normalizeChannelId(hostChannel.id) !== normalizeChannelId(currentChannelId)
+    );
+}
+
+function getHostChannelName(video, options) {
+    const hostChannel = getVideoHostChannel(video);
+    if (!shouldShowHostChannel(hostChannel, options)) return '';
+
+    return hostChannel.name
+        || hostChannel.english_name
+        || hostChannel.englishName
+        || '';
+}
+
 function createStatusBadge(status) {
     if (status === 'live') {
-        return '<span class="status-badge status-live">🔴 LIVE</span>';
+        return '<span class="status-badge status-live">LIVE</span>';
     }
     if (status === 'upcoming') {
-        return '<span class="status-badge status-upcoming">⏰ 예정</span>';
+        return '<span class="status-badge status-upcoming">예정</span>';
     }
     return '';
 }
@@ -144,8 +206,8 @@ function createLiveInfo(video) {
 
     return `
         <div class="live-info">
-            <span class="viewers">👀 ${viewers}</span>
-            ${elapsed ? `<span class="elapsed">⏱️ ${elapsed}</span>` : ''}
+            <span class="viewers">시청자 ${viewers}</span>
+            ${elapsed ? `<span class="elapsed">${elapsed}</span>` : ''}
         </div>
     `;
 }
@@ -170,18 +232,18 @@ function escapeHtml(text) {
 function createCollabMembers(mentions) {
     if (!mentions || mentions.length === 0) return '';
 
-    console.log(`📍 Creating collab icons: ${mentions.length} members`);
-
-    // 모든 멤버 표시 - div로 생성하고 background-image 사용
     const memberIcons = mentions.map((member, idx) => {
-        const photo = member.photo || '';
+        const photo = getMemberPhotoUrl(member);
+        const fallback = getRemoteMemberPhotoUrl(member);
         const name = member.name || member.english_name || '멤버';
-        // div + background-image 방식으로 변경
-        return `<div class="collab-icon" 
-            style="background-image: url('${photo}')" 
-            title="${escapeHtml(name)}"
-            data-idx="${idx}"></div>`;
-    }).join('');
+        if (!photo) return '';
+
+        return `<div class="collab-icon" title="${escapeHtml(name)}" data-idx="${idx}">
+            <img src="${escapeHtml(photo)}" data-fallback="${escapeHtml(fallback)}" alt="" loading="eager" decoding="async">
+        </div>`;
+    }).filter(Boolean).join('');
+
+    if (!memberIcons) return '';
 
     return `
         <div class="collab-members" data-count="${mentions.length}">
