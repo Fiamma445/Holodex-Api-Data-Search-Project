@@ -125,20 +125,12 @@ flowchart LR
 
 ## 실행 방법
 
-```bash
-pip install -r requirements.txt
-uvicorn server:app --host 0.0.0.0 --port 8000 --reload
-```
+이 저장소는 현재 라이브 서비스 코드와 포트폴리오 기록을 함께 보관하는 용도입니다. 운영 데이터베이스와 채널 아이콘은 저장소에 포함하지 않고 R2/object storage 및 Railway 런타임 자산으로 분리했기 때문에, 단순 클론만으로는 로컬에서 동일한 화면을 재현할 수 없습니다.
 
-```text
-http://localhost:8000/
-```
-
-운영 환경에서는 아래 환경변수를 사용합니다.
-
-```text
-HOLODEX_API_KEY=...
-AUTO_SYNC_ENABLED=true
-AUTO_SYNC_INTERVAL_SECONDS=3600
-STATIC_DIR=public
-```
+| 구분 | 내용 |
+| --- | --- |
+| 운영 서비스 | [https://holo-search.xyz](https://holo-search.xyz/) |
+| 실행 환경 | Railway 배포 환경 |
+| 필수 서버 설정 | `HOLODEX_API_KEY`, `AUTO_SYNC_ENABLED`, `AUTO_SYNC_INTERVAL_SECONDS`, `SEED_DB_URL`, `STATIC_DIR` |
+| 필수 외부 자산 | R2/object storage의 seed DB와 `assets.holo-search.xyz` 채널 아이콘 |
+| 로컬 실행 안내 | DB와 아이콘 자산이 빠진 상태에서는 기능 검증이 왜곡되므로 제공하지 않음 |
