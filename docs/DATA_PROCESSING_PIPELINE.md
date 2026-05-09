@@ -1,12 +1,12 @@
 # Data Processing & Analysis Pipeline
 
-HoloProject의 데이터 파이프라인은 Holodex API 응답을 그대로 화면에 뿌리는 구조가 아니라, 반복 조회가 많은 기능을 SQLite 기반 데이터 마트로 재구성하는 구조입니다. 키리누키 검색처럼 Holodex의 실시간 검색 옵션이 필요한 기능만 예외로 두고, 라이브/예정, 아카이브, 노래 DB, 통계, 채널 인덱스는 서버가 보유한 DB와 정적 리소스 계층에서 제공합니다.
+HoloProject의 데이터 파이프라인은 Holodex API 응답을 그대로 화면에 뿌리는 구조가 아니라, 반복 조회가 많은 기능을 SQLite 기반 데이터 마트로 재구성하는 구조입니다. 라이브/예정, 아카이브, 노래 DB, 통계, 채널 인덱스는 서버가 보유한 DB와 정적 리소스 계층에서 제공합니다.
 
 ## 1. Pipeline Goal
 
 | 목표 | 구현 방향 |
 | --- | --- |
-| API 과다 호출 방지 | 키리누키를 제외한 주요 화면을 DB-backed API로 전환 |
+| API 과다 호출 방지 | 주요 화면을 DB-backed API로 전환 |
 | 원본 보존 | Holodex raw JSON을 `videos.json_data`에 저장 |
 | 반복 검색 최적화 | 멘션과 곡 구간을 별도 테이블로 정규화 |
 | 운영 복구 단순화 | seed DB를 `SEED_DB_URL`로 복원하고 R2/object storage에 분리 |
@@ -27,11 +27,9 @@ flowchart LR
     E --> H["Archive / Live API"]
     F --> H
     G --> J["Songs / Stats API"]
-    K["Holodex Search API"] --> L["Kirinuki Proxy<br/>language filter"]
     H --> U["HoloSearch UI"]
     I --> U
     J --> U
-    L --> U
 ```
 
 ## 3. Storage Model
@@ -86,9 +84,8 @@ CREATE TABLE videos (
 | 아카이브 | SQLite `videos` + `video_mentions` |
 | 노래 DB | SQLite `video_songs` |
 | 통계 | SQLite 집계 쿼리 |
-| 키리누키 | Holodex Search API 실시간 proxy |
 
-키리누키는 언어별 검색 조건이 Holodex 검색 API에 직접 묶여 있으므로 예외 경로로 남겼습니다. 대신 아카이브, 노래, 통계처럼 반복 조회가 많은 기능은 DB에서 제공해 API 사용량과 응답 흔들림을 줄였습니다.
+아카이브, 노래, 통계처럼 반복 조회가 많은 기능은 DB에서 제공해 API 사용량과 응답 흔들림을 줄였습니다.
 
 ## 6. Derived Metrics
 
