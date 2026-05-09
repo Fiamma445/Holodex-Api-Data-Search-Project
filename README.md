@@ -91,13 +91,17 @@ flowchart LR
 
 ## 구현 화면
 
-| 라이브 서비스 홈 | 멤버별 홈 |
+| 멤버별 홈 | 라이브 & 예정 |
 | --- | --- |
-| ![HoloSearch live service home](docs/readme-live-home.png) | ![HoloProject home dashboard](docs/assets/readme/holo-home.png) |
+| ![HoloSearch member home](docs/assets/readme/holo-home.png) | ![HoloSearch live and upcoming](docs/assets/readme/holo-live.png) |
 
-| 아카이브 검색 | 방송 통계 |
+| 아카이브 검색 | 노래 DB |
 | --- | --- |
-| ![HoloProject archive search](docs/assets/readme/holo-archive.png) | ![HoloProject statistics dashboard](docs/assets/readme/holo-stats.png) |
+| ![HoloSearch archive search](docs/assets/readme/holo-archive.png) | ![HoloSearch song database](docs/assets/readme/holo-songs.png) |
+
+| 방송 통계 |
+| --- |
+| ![HoloSearch statistics dashboard](docs/assets/readme/holo-stats.png) |
 
 현재 서비스는 위 기본 화면에 더해 라이브/예정 탭, 키리누키 언어 필터, 노래 DB, 탤런트 관리, 언아카이브 숨김, 날짜/연월 필터를 제공합니다. 화면에서 보이는 채널 아이콘과 채널 인덱스는 정적 리소스 계층으로 분리해 로딩 부담을 줄였고, 영상 목록과 통계는 Holodex API를 직접 반복 호출하지 않고 DB-backed API에서 내려줍니다.
 
