@@ -35,13 +35,17 @@ flowchart LR
 
 데이터 모델도 전부 관계형 테이블로 펼치지 않았습니다. Holodex 응답은 `mentions`, `songs`, `topic_id`, 상태값처럼 분석에 중요한 정보가 JSON 안에 섞여 있습니다. 원본 JSON은 그대로 보존하되, 반복 조회가 필요한 멘션과 노래 구간은 `video_mentions`, `video_songs` 테이블로 분리했습니다. 이 방식으로 API 변경에 대응할 유연성과 검색 성능을 동시에 확보했습니다.
 
+운영 단계에서 가장 크게 바뀐 판단은 **API 과다 호출을 줄이기 위해 키리누키 검색을 제외한 핵심 기능을 DB 기반으로 분리한 것**입니다. 라이브/예정, 아카이브, 노래 DB, 통계, 채널 인덱스는 서버가 주기적으로 동기화한 SQLite 데이터를 읽고, 키리누키만 언어 조합과 최신 검색성이 중요해 Holodex 검색 API를 실시간으로 사용합니다. 대용량 seed DB와 채널 아이콘 같은 정적 리소스는 Cloudflare R2 같은 object storage로 빼서, Git 저장소와 Railway 런타임에 무거운 파일을 직접 싣지 않도록 설계했습니다.
+
 ## 설계 기준
 
 | 판단 지점 | 선택한 기준 | 이유 |
 | --- | --- | --- |
 | API 호출 방식 | 서버 프록시 + 로컬 DB 병행 | 라이브/예정은 최신성이 중요하고, 아카이브/통계는 재현성이 중요하기 때문 |
+| API 호출 절감 | 키리누키를 제외한 주요 기능은 DB 조회 우선 | 같은 채널/페이지를 볼 때마다 Holodex API를 반복 호출하지 않기 위해 |
 | 자동 갱신 | Railway 서버에서 1시간 주기 증분 동기화 | 사용자가 수동으로 API Key를 넣지 않아도 데이터가 유지되도록 설계 |
 | 저장 구조 | SQLite + Raw JSON + 정규화 테이블 | 원본 보존, 검색 성능, API 변경 대응을 모두 만족하기 위해 |
+| 대용량 리소스 분리 | seed DB와 채널 아이콘을 R2/object storage로 분리 | 배포 크기와 런타임 디스크 부담을 줄이고, 장애 시 빠르게 복구하기 위해 |
 | 콜라보 필터 | `video_mentions` 기반 OR/AND 검색 | 단순 mentions 표시가 아니라 멤버 간 관계 탐색이 가능하도록 |
 | 키리누키 필터 | Holodex 검색 API의 언어 조건 사용 | 일본어, 한국어, 영어, 중국어 클립을 사용자가 직접 조합해 볼 수 있도록 |
 | 노래 DB | Holodex/Musicdex `songs` 메타데이터 적재 | 방송 내 곡 구간을 검색하되, 자체 음원 인식이 아니라 원천 메타데이터를 신뢰 |
@@ -51,22 +55,35 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A["Holodex API<br/>/live /videos /search"] --> B["FastAPI Proxy & Sync"]
-    B --> C["SQLite videos<br/>Raw JSON 저장"]
-    C --> D["video_mentions<br/>콜라보 정규화"]
-    C --> E["video_songs<br/>곡 구간 정규화"]
-    D --> F["Search / Stats API"]
-    E --> F
-    F --> G["Vanilla JS Dashboard"]
-    G --> H["Railway + Cloudflare"]
+    A["Holodex API<br/>videos, live, songs"] --> B["Hourly Sync Worker<br/>Railway"]
+    B --> C["SQLite Data Mart<br/>Railway Volume"]
+    C --> D["videos<br/>Raw JSON"]
+    C --> E["video_mentions<br/>콜라보 정규화"]
+    C --> F["video_songs<br/>곡 구간 정규화"]
+    R["Cloudflare R2<br/>seed DB, channel icons"] --> S["Seed Restore<br/>Static Asset Layer"]
+    S --> C
+    S --> I["Channel Index<br/>Icon Assets"]
+    D --> G["Search / Archive API"]
+    E --> G
+    F --> H["Songs / Stats API"]
+    K["Holodex Search API<br/>키리누키 예외 경로"] --> L["Kirinuki Proxy"]
+    G --> U["Vanilla JS Dashboard"]
+    H --> U
+    I --> U
+    L --> U
+    U --> V["holo-search.xyz"]
 ```
+
+이 흐름에서 핵심은 조회 경로를 둘로 나눈 점입니다. 아카이브, 라이브/예정, 노래, 통계, 채널 아이콘은 DB와 정적 리소스 계층에서 읽어 API 호출을 줄이고, 키리누키는 Holodex의 언어 필터 검색 기능을 그대로 활용합니다. 즉 사용자는 별도 API Key가 없어도 대부분의 화면을 사용할 수 있고, 운영자는 R2에 올린 seed DB와 아이콘 리소스로 배포와 복구를 단순화할 수 있습니다.
 
 ## 차별점
 
 | 기존 접근의 한계 | 이 프로젝트의 관점 |
 | --- | --- |
 | Holodex 기능이 여러 엔드포인트와 옵션으로 나뉘어 있음 | 라이브, 아카이브, 키리누키, 노래 DB, 통계를 하나의 탐색 UI로 통합 |
+| 사용자가 화면을 열 때마다 외부 API를 호출하면 Rate Limit과 응답 지연이 누적됨 | 키리누키를 제외한 기능을 DB 기반으로 전환해 반복 조회 비용을 서버 내부 조회로 흡수 |
 | API 응답을 바로 화면에 보여주면 인증과 시점에 따라 결과가 흔들릴 수 있음 | 서버 환경변수 API Key와 로컬 SQLite를 사용해 공용 기능의 재현성 확보 |
+| seed DB와 아이콘을 앱 저장소에 직접 묶으면 배포가 무거워지고 복구가 느려짐 | Cloudflare R2/object storage에 대용량 리소스를 분리해 배포물은 가볍게 유지 |
 | 깊은 JSON 구조를 매번 파싱하면 검색과 통계 쿼리가 복잡해짐 | Raw JSON은 보존하고 멘션/노래 구간은 별도 테이블로 정규화 |
 | 영상별 mentions만 보면 콜라보 흐름을 파악하기 어려움 | 멤버 기준 콜라보 OR/AND 필터와 통계 API로 관계 탐색을 지원 |
 | 키리누키 언어 필터는 단일 언어 선택에 머무르기 쉬움 | 선택한 언어 조합을 Holodex 쿼리에 반영해 포함 조건으로 검색 |
@@ -74,15 +91,15 @@ flowchart LR
 
 ## 구현 화면
 
-| 멤버별 홈 | 방송 통계 |
+| 라이브 서비스 홈 | 멤버별 홈 |
 | --- | --- |
-| ![HoloProject home dashboard](docs/assets/readme/holo-home.png) | ![HoloProject statistics dashboard](docs/assets/readme/holo-stats.png) |
+| ![HoloSearch live service home](docs/readme-live-home.png) | ![HoloProject home dashboard](docs/assets/readme/holo-home.png) |
 
-| 아카이브 검색 | 콜라보 필터 |
+| 아카이브 검색 | 방송 통계 |
 | --- | --- |
-| ![HoloProject archive search](docs/assets/readme/holo-archive.png) | ![HoloProject collaboration filter](docs/assets/readme/holo-filter.png) |
+| ![HoloProject archive search](docs/assets/readme/holo-archive.png) | ![HoloProject statistics dashboard](docs/assets/readme/holo-stats.png) |
 
-현재 서비스는 위 기본 화면에 더해 라이브/예정 탭, 키리누키 언어 필터, 노래 DB, 탤런트 관리, 언아카이브 숨김, 날짜/연월 필터를 제공합니다.
+현재 서비스는 위 기본 화면에 더해 라이브/예정 탭, 키리누키 언어 필터, 노래 DB, 탤런트 관리, 언아카이브 숨김, 날짜/연월 필터를 제공합니다. 화면에서 보이는 채널 아이콘과 채널 인덱스는 정적 리소스 계층으로 분리해 로딩 부담을 줄였고, 영상 목록과 통계는 Holodex API를 직접 반복 호출하지 않고 DB-backed API에서 내려줍니다.
 
 ## 산출물
 
@@ -93,6 +110,9 @@ flowchart LR
 | 서버 코드 | `server.py`, `database.py` |
 | 프론트 코드 | `app.js`, `api.js`, `src/`, `public/src/` |
 | 정규화 데이터 레이어 | `videos`, `video_mentions`, `video_songs` |
+| DB 기반 조회 API | `/api/search`, `/api/songs`, `/api/stats/*`, `/api/channel-index` |
+| 실시간 예외 API | 키리누키 검색용 Holodex search proxy |
+| R2/object storage 운영 자산 | `SEED_DB_URL` seed DB, 채널 아이콘 정적 리소스 |
 | 배포 설정 | `Procfile`, `requirements.txt` |
 | 운영 서비스 | [https://holo-search.xyz](https://holo-search.xyz/) |
 
