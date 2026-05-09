@@ -8,18 +8,18 @@ import {
     CHANNELS, DEFAULT_CHANNEL_ID, getDefaultChannelId, getChannelById,
     getMyChannels, saveMyChannels, addChannel, removeChannel,
     DEFAULT_CHANNELS
-} from './src/data/channels.js?v=20260510-1';
-import { getState, setState, INITIAL_STATE, getPersistedState } from './src/state/appState.js?v=20260510-1';
-import { getStateFromHash, updateUrlHash, restoreStateFromHash } from './src/state/urlHash.js?v=20260510-1';
-import { showToast } from './src/ui/toast.js?v=20260510-1';
-import { showSyncOverlay, hideSyncOverlay, updateSyncOverlay } from './src/ui/syncOverlay.js?v=20260510-1';
-import { createVideoCard } from './src/ui/videoCard.js?v=20260510-1';
-import { createSongCard } from './src/ui/songCard.js?v=20260510-1';
-import { renderChannelList, updateActiveChannel, applyChannelTheme } from './src/ui/channelList.js?v=20260510-1';
-import { renderPagination, ITEMS_PER_PAGE } from './src/ui/pagination.js?v=20260510-1';
-import { getChannelImageProxyUrl, getMemberPhotoUrl, getRemoteMemberPhotoUrl } from './src/data/memberPhotos.js?v=20260510-1';
-import { applyLocale, getLocale, setLocale, t } from './src/data/i18n.js?v=20260510-4';
-import { getLocalizedGenerationName, getLocalizedTalentName } from './src/data/localizedNames.js?v=20260510-1';
+} from './public/src/data/channels.js?v=20260510-1';
+import { getState, setState, INITIAL_STATE, getPersistedState } from './public/src/state/appState.js?v=20260510-1';
+import { getStateFromHash, updateUrlHash, restoreStateFromHash } from './public/src/state/urlHash.js?v=20260510-1';
+import { showToast } from './public/src/ui/toast.js?v=20260510-1';
+import { showSyncOverlay, hideSyncOverlay, updateSyncOverlay } from './public/src/ui/syncOverlay.js?v=20260510-1';
+import { createVideoCard } from './public/src/ui/videoCard.js?v=20260510-1';
+import { createSongCard } from './public/src/ui/songCard.js?v=20260510-1';
+import { renderChannelList, updateActiveChannel, applyChannelTheme } from './public/src/ui/channelList.js?v=20260510-1';
+import { renderPagination, ITEMS_PER_PAGE } from './public/src/ui/pagination.js?v=20260510-1';
+import { getChannelImageProxyUrl, getMemberPhotoUrl, getRemoteMemberPhotoUrl } from './public/src/data/memberPhotos.js?v=20260510-1';
+import { applyLocale, getLocale, setLocale, t } from './public/src/data/i18n.js?v=20260510-4';
+import { getLocalizedGenerationName, getLocalizedTalentName } from './public/src/data/localizedNames.js?v=20260510-1';
 
 let refreshInterval = null;
 let syncPollInterval = null;

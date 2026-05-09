@@ -108,7 +108,7 @@ flowchart LR
 | 데이터 처리 문서 | [DATA_PROCESSING_PIPELINE.md](docs/DATA_PROCESSING_PIPELINE.md) |
 | 문제 해결 기록 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 | 서버 코드 | `server.py`, `database.py` |
-| 프론트 코드 | `app.js`, `api.js`, `src/`, `public/src/` |
+| 프론트 코드 | `public/`, `public/src/` |
 | 정규화 데이터 레이어 | `videos`, `video_mentions`, `video_songs` |
 | DB 기반 조회 API | `/api/search`, `/api/songs`, `/api/stats/*`, `/api/channel-index` |
 | 실시간 예외 API | 키리누키 검색용 Holodex search proxy |

@@ -827,7 +827,7 @@ async function getLocalizedSearchNames() {
     if (localizedSearchNamesCache) return localizedSearchNamesCache;
 
     try {
-        const module = await import(`./src/data/localizedNames.js?v=${SEARCH_NAME_MODULE_VERSION}`);
+        const module = await import(`./public/src/data/localizedNames.js?v=${SEARCH_NAME_MODULE_VERSION}`);
         localizedSearchNamesCache = new Map(
             Object.entries(module.TALENT_NAMES || {}).map(([id, names]) => {
                 const aliases = Object.values(names).filter(Boolean);
